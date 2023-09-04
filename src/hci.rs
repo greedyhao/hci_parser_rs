@@ -1,3 +1,6 @@
+use std::vec;
+
+use crate::l2cap;
 use crate::InnerStack;
 use crate::ParseLayer;
 use crate::ParseNode;
@@ -15,6 +18,7 @@ pub enum HciPacket {
 #[allow(unused)]
 #[repr(u8)]
 enum HciCmdOgf {
+    NoUse = 0,
     LinkControl = 0x01,
     LinkPolicy,
     ControlAndBaseBand,
@@ -22,6 +26,22 @@ enum HciCmdOgf {
     StatusParameters,
     Testing,
     LeController = 0x08,
+}
+
+impl HciCmdOgf {
+    fn from_u8(ogf: u8) -> Self {
+        use HciCmdOgf::*;
+        match ogf {
+            0x01 => LinkControl,
+            0x02 => LinkPolicy,
+            0x03 => ControlAndBaseBand,
+            0x04 => InformationalParameters,
+            0x05 => StatusParameters,
+            0x06 => Testing,
+            0x08 => LeController,
+            _ => NoUse,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -48,24 +68,42 @@ impl<T: ParseNode> ParseLayer for HciCmd<T> {
         let ocf = self.opcode & 0x3FF;
         let ogf = self.opcode >> 10;
 
+        let opcode_s = "Opcode";
+        let ocf_s = "OCF";
+        let ogf_s = "OGF";
+        let command_s = "Command";
+        let param_total_len_s = "Parameter_Total_Length";
         let info = self.param.get_info();
-        let mut main = format!(
-            r#"{{"Opcode":"{:#x}", "OCF":"{:#x}", "OGF":"{:#x}", "Command":"{}", "Parameter_Total_Length":"{:#x}""#,
-            self.opcode, ocf, ogf, info.0, self.param_total_len
+        let mut major = format!(
+            r#"{{"{}":"{:#x}", "{}":"{:#x}", "{}":"{:#x}", "{}":"{}", "{}":"{:#x}""#,
+            opcode_s,
+            self.opcode,
+            ocf_s,
+            ocf,
+            ogf_s,
+            ogf,
+            command_s,
+            info.0,
+            param_total_len_s,
+            self.param_total_len
         );
-        let mut index = format!(
-            r#"{{"Opcode":"0,2", "OCF":"0,1", "OGF","1,1", "Command":"0,2", "Parameter_Total_Length":"2,1,0""#
+        let mut minor = format!(
+            r#"{{"{}":"(0,2)", "{}":"(0,1)", "{}","(1,1)", "{}":"(0,2)", "{}":"(2,1),0""#,
+            opcode_s, ocf_s, ogf_s, command_s, param_total_len_s
         );
 
         let mut cnt = 3;
         for sub in info.1 {
-            main.push_str(format!(r#", {}:{}"#, sub.0, sub.1).as_str());
-            index.push_str(format!(r#", "{}":"{},{}""#, sub.0, cnt, sub.2).as_str());
+            major.push_str(format!(r#", {}:{}"#, sub.0, sub.1).as_str());
+            minor.push_str(format!(r#", "{}":"({},{})""#, sub.0, cnt, sub.2).as_str());
+            if sub.3 != ParseStatus::Ok {
+                minor.push_str(format!(r#",{}"#, sub.3 as u8).as_str());
+            }
             cnt += sub.2;
         }
-        main.push_str("}");
-        index.push_str("}");
-        (main, index)
+        major.push_str("}");
+        minor.push_str("}");
+        (major, minor)
     }
 }
 
@@ -218,13 +256,64 @@ impl ParseNode for HciCmdOgf3Reset {
 //     LeSetEventMask = 1,
 // }
 
+/// HCI ACL
+
+// struct HciAcl<T> {
+//     /// Handle:[0-11], PB Flag:[12-13], PC Flag:[14-15]
+//     handle_and_flags: u16,
+//     data_total_length: u16,
+//     data: T,
+// }
+
+// impl<T: ParseNode> HciAcl<T> {
+//     fn new(data: &[u8]) -> Self {
+//         let handle_and_flags = data[0] as u16 | (data[1] as u16) << 8;
+//         let data_total_length = data[2] as u16 | (data[3] as u16) << 8;
+//         HciAcl {
+//             handle_and_flags,
+//             data_total_length,
+//             data: T::new(&data[4..]),
+//         }
+//     }
+// }
+
+// impl<T: ParseNode> ParseLayer for HciAcl<T> {
+//     fn to_json(&self) -> (String, String) {
+//         let handle_s = "Handle";
+//         let pb_flag_s = "PB Flag";
+//         let pc_flag_s = "PC Flag";
+//         let data_total_length_s = "Data Total Length";
+
+//         let mut major = format!(
+//             r#"{{"{}":"{:#x}", "{}":"{:#x}", "{}":"{:#x}", "{}":"{:#x}""#,
+//             handle_s,
+//             self.handle_and_flags & 0xfff,
+//             pb_flag_s,
+//             (self.handle_and_flags >> 12) & 0x3,
+//             pc_flag_s,
+//             self.handle_and_flags >> 14,
+//             data_total_length_s,
+//             self.data_total_length
+//         );
+//         let mut minor = format!(
+//             r#"{{"{}":"(0,2)", "{}":"(1,1)", "{}","(1,1)", "{}":"(2,2)""#,
+//             handle_s, pb_flag_s, pc_flag_s, data_total_length_s
+//         );
+
+//         major.push_str("}");
+//         minor.push_str("}");
+//         (major, minor)
+//     }
+// }
+
 pub fn parse(
     packet_type: HciPacket,
     data: &[u8],
-    _args: &mut InnerStack,
+    args: &mut InnerStack,
 ) -> Vec<Box<dyn ParseLayer>> {
-    let node: Box<dyn ParseLayer> = match packet_type {
-        HciPacket::Cmd => {
+    use HciPacket::*;
+    let node: Vec<Box<dyn ParseLayer>> = match packet_type {
+        Cmd => {
             if data.len() < 3 {
                 println!("data size err!(less than 3B)");
             }
@@ -233,7 +322,7 @@ pub fn parse(
             let ocf = opcode & 0x3FF;
             let ogf = opcode >> 10;
 
-            let ogf_conv: HciCmdOgf = unsafe { std::mem::transmute(ogf as u8) };
+            let ogf_conv = HciCmdOgf::from_u8(ogf as u8);
 
             use HciCmdControlAndBaseband::*;
             use HciCmdLinkControl::*;
@@ -274,12 +363,19 @@ pub fn parse(
                 }
             };
 
+            vec![ret]
+        }
+        Acl => {
+            if data.len() < 4 {
+                println!("data size err!(less than 4B)");
+            }
+            let ret = l2cap::parse(data, args);
             ret
         }
         _ => {
             let cmd: HciCmd<HciParseDummy> = HciCmd::new(data);
-            Box::new(cmd)
+            vec![Box::new(cmd)]
         }
     };
-    vec![node]
+    node
 }
