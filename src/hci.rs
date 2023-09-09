@@ -258,53 +258,51 @@ impl ParseNode for HciCmdOgf3Reset {
 
 /// HCI ACL
 
-// struct HciAcl<T> {
-//     /// Handle:[0-11], PB Flag:[12-13], PC Flag:[14-15]
-//     handle_and_flags: u16,
-//     data_total_length: u16,
-//     data: T,
-// }
+struct HciAcl{
+    /// Handle:[0-11], PB Flag:[12-13], PC Flag:[14-15]
+    handle_and_flags: u16,
+    data_total_length: u16,
+}
 
-// impl<T: ParseNode> HciAcl<T> {
-//     fn new(data: &[u8]) -> Self {
-//         let handle_and_flags = data[0] as u16 | (data[1] as u16) << 8;
-//         let data_total_length = data[2] as u16 | (data[3] as u16) << 8;
-//         HciAcl {
-//             handle_and_flags,
-//             data_total_length,
-//             data: T::new(&data[4..]),
-//         }
-//     }
-// }
+impl HciAcl {
+    fn new(data: &[u8]) -> Self {
+        let handle_and_flags = u16::from_le_bytes(data[0..2].try_into().unwrap());
+        let data_total_length = u16::from_le_bytes(data[2..4].try_into().unwrap());
+        HciAcl {
+            handle_and_flags,
+            data_total_length,
+        }
+    }
+}
 
-// impl<T: ParseNode> ParseLayer for HciAcl<T> {
-//     fn to_json(&self) -> (String, String) {
-//         let handle_s = "Handle";
-//         let pb_flag_s = "PB Flag";
-//         let pc_flag_s = "PC Flag";
-//         let data_total_length_s = "Data Total Length";
+impl ParseLayer for HciAcl {
+    fn to_json(&self) -> (String, String) {
+        let handle_s = "Handle";
+        let pb_flag_s = "PB Flag";
+        let pc_flag_s = "PC Flag";
+        let data_total_length_s = "Data Total Length";
 
-//         let mut major = format!(
-//             r#"{{"{}":"{:#x}", "{}":"{:#x}", "{}":"{:#x}", "{}":"{:#x}""#,
-//             handle_s,
-//             self.handle_and_flags & 0xfff,
-//             pb_flag_s,
-//             (self.handle_and_flags >> 12) & 0x3,
-//             pc_flag_s,
-//             self.handle_and_flags >> 14,
-//             data_total_length_s,
-//             self.data_total_length
-//         );
-//         let mut minor = format!(
-//             r#"{{"{}":"(0,2)", "{}":"(1,1)", "{}","(1,1)", "{}":"(2,2)""#,
-//             handle_s, pb_flag_s, pc_flag_s, data_total_length_s
-//         );
+        let mut major = format!(
+            r#"{{"{}":"{:#x}", "{}":"{:#x}", "{}":"{:#x}", "{}":"{:#x}""#,
+            handle_s,
+            self.handle_and_flags & 0xfff,
+            pb_flag_s,
+            (self.handle_and_flags >> 12) & 0x3,
+            pc_flag_s,
+            self.handle_and_flags >> 14,
+            data_total_length_s,
+            self.data_total_length
+        );
+        let mut minor = format!(
+            r#"{{"{}":"(0,2)", "{}":"(1,1)", "{}","(1,1)", "{}":"(2,2)""#,
+            handle_s, pb_flag_s, pc_flag_s, data_total_length_s
+        );
 
-//         major.push_str("}");
-//         minor.push_str("}");
-//         (major, minor)
-//     }
-// }
+        major.push_str("}");
+        minor.push_str("}");
+        (major, minor)
+    }
+}
 
 pub fn parse(
     packet_type: HciPacket,
@@ -318,7 +316,7 @@ pub fn parse(
                 println!("data size err!(less than 3B)");
             }
 
-            let opcode = data[0] as u16 | (data[1] as u16) << 8;
+            let opcode = u16::from_le_bytes(data[0..2].try_into().unwrap());
             let ocf = opcode & 0x3FF;
             let ogf = opcode >> 10;
 
@@ -369,7 +367,9 @@ pub fn parse(
             if data.len() < 4 {
                 println!("data size err!(less than 4B)");
             }
-            let ret = l2cap::parse(data, args);
+            let acl = HciAcl::new(data);
+            let mut ret = l2cap::parse(&data[4..], args);
+            ret.insert(0, Box::new(acl));
             ret
         }
         _ => {
