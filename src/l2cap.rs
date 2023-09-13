@@ -66,7 +66,7 @@ impl ParseLayer for L2capHeader {
         let pdu_length_s = "PDU Length";
         let channel_id_s = "Channel ID";
 
-        let mut major = format!(
+        let major = format!(
             r#"{{"{}":"{:#x}", "{}":"{:#x}({})""#,
             pdu_length_s,
             self.pdu_length,
@@ -75,7 +75,7 @@ impl ParseLayer for L2capHeader {
             CID::from_u16(self.channel_id)
         );
 
-        let mut minor = format!(
+        let minor = format!(
             r#"{{"{}":"(0,2)", "{}":"(2,2)""#,
             self.pdu_length, self.channel_id
         );
@@ -134,6 +134,17 @@ struct SignalCommand<T> {
     data: T,
 }
 
+impl<T: ParseNode> SignalCommand<T> {
+    fn new(data: &[u8]) -> Self {
+        SignalCommand {
+            code: data[0],
+            identifier: data[1],
+            data_length: u16::from_le_bytes(data[2..4].try_into().unwrap()),
+            data: T::new(&data[4..]),
+        }
+    }
+}
+
 impl<T: ParseNode> ParseLayer for SignalCommand<T> {
     fn to_json(&self) -> (String, String) {
         let code_s = "Code";
@@ -164,20 +175,6 @@ impl<T: ParseNode> ParseLayer for SignalCommand<T> {
         major.push_str("}");
         minor.push_str("}");
         (major, minor)
-    }
-}
-
-impl<T: ParseNode> ParseNode for SignalCommand<T> {
-    fn get_info(&self) -> (String, Vec<(String, String, u8, crate::ParseStatus)>) {
-        std::unimplemented!()
-    }
-    fn new(data: &[u8]) -> Self {
-        SignalCommand {
-            code: data[0],
-            identifier: data[1],
-            data_length: u16::from_le_bytes(data[2..4].try_into().unwrap()),
-            data: T::new(&data[4..]),
-        }
     }
 }
 
