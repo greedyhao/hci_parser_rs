@@ -94,7 +94,7 @@ impl<T: ParseNode> ParseLayer for HciCmd<T> {
 
         let mut cnt = 3;
         for sub in info.1 {
-            major.push_str(format!(r#", {}:{}"#, sub.0, sub.1).as_str());
+            major.push_str(format!(r#", "{}":"{}""#, sub.0, sub.1).as_str());
             minor.push_str(format!(r#", "{}":"({},{})""#, sub.0, cnt, sub.2).as_str());
             if sub.3 != ParseStatus::Ok {
                 minor.push_str(format!(r#",{}"#, sub.3 as u8).as_str());
