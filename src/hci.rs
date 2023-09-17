@@ -4,6 +4,8 @@ use crate::l2cap;
 use crate::InnerStack;
 use crate::ParseLayer;
 use crate::ParseNode;
+use crate::ParseNodeInfo;
+use crate::ParseNodeSubInfo;
 use crate::ParseStatus;
 
 #[allow(unused)]
@@ -83,7 +85,7 @@ impl<T: ParseNode> ParseLayer for HciCmd<T> {
             ogf_s,
             ogf,
             command_s,
-            info.0,
+            info.name,
             param_total_len_s,
             self.param_total_len
         );
@@ -93,13 +95,13 @@ impl<T: ParseNode> ParseLayer for HciCmd<T> {
         );
 
         let mut cnt = 3;
-        for sub in info.1 {
-            major.push_str(format!(r#", "{}":"{}""#, sub.0, sub.1).as_str());
-            minor.push_str(format!(r#", "{}":"({},{})""#, sub.0, cnt, sub.2).as_str());
-            if sub.3 != ParseStatus::Ok {
-                minor.push_str(format!(r#",{}"#, sub.3 as u8).as_str());
+        for sub in info.sub_info {
+            major.push_str(format!(r#", "{}":"{}""#, sub.key, sub.value).as_str());
+            minor.push_str(format!(r#", "{}":"({},{})""#, sub.key, cnt, sub.length).as_str());
+            if sub.status != ParseStatus::Ok {
+                minor.push_str(format!(r#",{}"#, sub.status as u8).as_str());
             }
-            cnt += sub.2;
+            cnt += sub.length;
         }
         major.push_str("}");
         minor.push_str("}");
@@ -114,8 +116,8 @@ impl ParseNode for HciParseDummy {
     fn new(_data: &[u8]) -> Self {
         HciParseDummy {}
     }
-    fn get_info(&self) -> (String, Vec<(String, String, u8, ParseStatus)>) {
-        (String::from("Dummy"), vec![])
+    fn get_info(&self) -> ParseNodeInfo {
+        ParseNodeInfo::new("Dummy".to_string(), vec![])
     }
 }
 
@@ -150,7 +152,7 @@ impl ParseNode for HciCmdOgf1Inquiry {
             num_responses: data[4],
         }
     }
-    fn get_info(&self) -> (String, Vec<(String, String, u8, ParseStatus)>) {
+    fn get_info(&self) -> ParseNodeInfo {
         let lap = (self.lap[0] as u32) | (self.lap[1] as u32) << 8 | (self.lap[2] as u32) << 16;
         let lap_check = if lap >= 0x9E8B00 && lap <= 0x9E8B3F {
             ParseStatus::Ok
@@ -165,18 +167,18 @@ impl ParseNode for HciCmdOgf1Inquiry {
             ParseStatus::Error
         };
 
-        (
-            String::from("Inquiry"),
+        ParseNodeInfo::new(
+            "Inquiry".to_string(),
             vec![
-                (String::from("LAP"), format!("{:#x}", lap), 3, lap_check),
-                (
-                    String::from("Inquiry_Length"),
+                ParseNodeSubInfo::new("LAP".to_string(), format!("{:#x}", lap), 3, lap_check),
+                ParseNodeSubInfo::new(
+                    "Inquiry_Length".to_string(),
                     format!("{:#x}", self.inquiry_length),
                     1,
                     inquiry_length_check,
                 ),
-                (
-                    String::from("Num_Responses"),
+                ParseNodeSubInfo::new(
+                    "Num_Responses".to_string(),
                     format!("{:#x}", self.num_responses),
                     1,
                     ParseStatus::Ok,
@@ -219,8 +221,8 @@ impl ParseNode for HciCmdOgf3Reset {
     fn new(_data: &[u8]) -> Self {
         HciCmdOgf3Reset {}
     }
-    fn get_info(&self) -> (String, Vec<(String, String, u8, ParseStatus)>) {
-        (String::from("Reset"), vec![])
+    fn get_info(&self) -> ParseNodeInfo {
+        ParseNodeInfo::new("Reset".to_string(), vec![])
     }
 }
 
@@ -258,7 +260,7 @@ impl ParseNode for HciCmdOgf3Reset {
 
 /// HCI ACL
 
-struct HciAcl{
+struct HciAcl {
     /// Handle:[0-11], PB Flag:[12-13], PC Flag:[14-15]
     handle_and_flags: u16,
     data_total_length: u16,

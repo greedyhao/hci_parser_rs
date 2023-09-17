@@ -1,8 +1,11 @@
 use std::fmt::Debug;
+use std::vec;
 
 use crate::InnerStack;
 use crate::ParseLayer;
 use crate::ParseNode;
+use crate::ParseNodeInfo;
+use crate::ParseNodeSubInfo;
 use crate::ParseStatus;
 
 #[derive(Default, Debug)]
@@ -80,11 +83,9 @@ struct L2capHeader {
 
 impl L2capHeader {
     fn new(data: &[u8]) -> Self {
-        let pdu_length = u16::from_le_bytes(data[0..2].try_into().unwrap());
-        let channel_id = u16::from_le_bytes(data[2..4].try_into().unwrap());
         L2capHeader {
-            pdu_length,
-            channel_id,
+            pdu_length: u16::from_le_bytes(data[0..2].try_into().unwrap()),
+            channel_id: u16::from_le_bytes(data[2..4].try_into().unwrap()),
         }
     }
 }
@@ -178,10 +179,17 @@ impl<T: ParseNode> ParseLayer for SignalCommand<T> {
         let code_s = "Code";
         let identifier_s = "Identifier";
         let data_length_s = "Data Length";
+        let info = self.data.get_info();
 
         let mut major = format!(
-            r#", "{}":"{:#x}", "{}":"{:#x}", "{}":"{:#x}""#,
-            code_s, self.code, identifier_s, self.identifier, data_length_s, self.data_length,
+            r#", "{}":"{:#x}({})", "{}":"{:#x}", "{}":"{:#x}""#,
+            code_s,
+            self.code,
+            info.name,
+            identifier_s,
+            self.identifier,
+            data_length_s,
+            self.data_length,
         );
 
         let mut minor = format!(
@@ -189,15 +197,14 @@ impl<T: ParseNode> ParseLayer for SignalCommand<T> {
             code_s, identifier_s, data_length_s
         );
 
-        let info = self.data.get_info();
         let mut cnt = 4;
-        for sub in info.1 {
-            major.push_str(format!(r#", "{}":"{}""#, sub.0, sub.1).as_str());
-            minor.push_str(format!(r#", "{}":"({},{})""#, sub.0, cnt, sub.2).as_str());
-            if sub.3 != ParseStatus::Ok {
-                minor.push_str(format!(r#",{}"#, sub.3 as u8).as_str());
+        for sub in info.sub_info {
+            major.push_str(format!(r#", "{}":"{}""#, sub.key, sub.value).as_str());
+            minor.push_str(format!(r#", "{}":"({},{})""#, sub.key, cnt, sub.length).as_str());
+            if sub.status != ParseStatus::Ok {
+                minor.push_str(format!(r#",{}"#, sub.status as u8).as_str());
             }
-            cnt += sub.2;
+            cnt += sub.length;
         }
 
         major.push_str("}");
@@ -210,11 +217,8 @@ impl<T: ParseNode> ParseLayer for SignalCommand<T> {
 struct SignalUndefined {}
 
 impl ParseNode for SignalUndefined {
-    fn get_info(&self) -> (String, Vec<(String, String, u8, ParseStatus)>) {
-        (
-            String::new(),
-            vec![(String::new(), String::new(), 0, ParseStatus::Error)],
-        )
+    fn get_info(&self) -> ParseNodeInfo {
+        ParseNodeInfo::new("Undefine".to_string(), vec![])
     }
     fn new(_data: &[u8]) -> Self {
         SignalUndefined {}
@@ -236,22 +240,22 @@ struct ConnectionReq {
 }
 
 impl ParseNode for ConnectionReq {
-    fn get_info(&self) -> (String, Vec<(String, String, u8, ParseStatus)>) {
+    fn get_info(&self) -> ParseNodeInfo {
         let psm_s = "PSM";
         let source_cid_s = "Source CID";
 
         let psm_name_s = get_psm_name(self.psm);
-        (
-            String::from("L2CAP_CONNECTION_REQ "),
+        ParseNodeInfo::new(
+            "L2CAP_CONNECTION_REQ".to_string(),
             vec![
-                (
-                    String::from(psm_s),
+                ParseNodeSubInfo::new(
+                    psm_s.to_string(),
                     format!("{:#x}({})", self.psm, psm_name_s),
                     2,
                     check_parse_status(psm_name_s.as_str()),
                 ),
-                (
-                    String::from(source_cid_s),
+                ParseNodeSubInfo::new(
+                    source_cid_s.to_string(),
                     format!("{:#x}", self.source_cid),
                     2,
                     ParseStatus::Ok,
@@ -277,7 +281,7 @@ struct ConnectionRsp {
 }
 
 impl ParseNode for ConnectionRsp {
-    fn get_info(&self) -> (String, Vec<(String, String, u8, ParseStatus)>) {
+    fn get_info(&self) -> ParseNodeInfo {
         let dest_cid_s = "Destination CID";
         let source_cid_s = "Source CID";
         let result_s = "Result";
@@ -301,28 +305,28 @@ impl ParseNode for ConnectionRsp {
             _ => "",
         };
 
-        (
+        ParseNodeInfo::new(
             "L2CAP_CONNECTION_RSP".to_string(),
             vec![
-                (
+                ParseNodeSubInfo::new(
                     dest_cid_s.to_string(),
                     format!("{:#x}", self.dest_cid),
                     2,
                     ParseStatus::Ok,
                 ),
-                (
+                ParseNodeSubInfo::new(
                     source_cid_s.to_string(),
                     format!("{:#x}", self.source_cid),
                     2,
                     ParseStatus::Ok,
                 ),
-                (
+                ParseNodeSubInfo::new(
                     result_s.to_string(),
                     format!("{:#x}({})", self.result, result_name_s),
                     2,
                     check_parse_status(result_name_s),
                 ),
-                (
+                ParseNodeSubInfo::new(
                     status_s.to_string(),
                     format!("{:#x}({})", self.status, status_name_s),
                     2,
@@ -392,7 +396,7 @@ struct InformationReq {
 }
 
 impl ParseNode for InformationReq {
-    fn get_info(&self) -> (String, Vec<(String, String, u8, ParseStatus)>) {
+    fn get_info(&self) -> ParseNodeInfo {
         let info_type_s = "Info Type";
         let info_type_name_s = match self.info_type {
             1 => "Connectionless MTU",
@@ -401,9 +405,9 @@ impl ParseNode for InformationReq {
             _ => "",
         };
 
-        (
+        ParseNodeInfo::new(
             "L2CAP_INFORMATION_REQ".to_string(),
-            vec![(
+            vec![ParseNodeSubInfo::new(
                 String::from(info_type_s),
                 format!("{:#x}({})", self.info_type, info_type_name_s),
                 2,
@@ -427,10 +431,15 @@ struct InformationRsp {
 }
 
 impl ParseNode for InformationRsp {
-    fn get_info(&self) -> (String, Vec<(String, String, u8, ParseStatus)>) {
-        (
-            String::new(),
-            vec![(String::new(), String::new(), 0, ParseStatus::Error)],
+    fn get_info(&self) -> ParseNodeInfo {
+        ParseNodeInfo::new(
+            "L2CAP_INFORMATION_RSP".to_string(),
+            vec![ParseNodeSubInfo::new(
+                String::new(),
+                String::new(),
+                0,
+                ParseStatus::Error,
+            )],
         )
     }
     fn new(data: &[u8]) -> Self {

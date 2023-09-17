@@ -36,7 +36,36 @@ pub trait ParseLayer {
 /// Subset of the `ParseLayer`
 pub trait ParseNode {
     fn new(data: &[u8]) -> Self;
-    fn get_info(&self) -> (String, Vec<(String, String, u8, ParseStatus)>);
+    fn get_info(&self) -> ParseNodeInfo;
+}
+
+pub struct ParseNodeSubInfo {
+    key: String,
+    value: String,
+    length: u8,
+    status: ParseStatus,
+}
+
+impl ParseNodeSubInfo {
+    fn new(key: String, value: String, length: u8, status: ParseStatus) -> Self {
+        ParseNodeSubInfo {
+            key,
+            value,
+            length,
+            status,
+        }
+    }
+}
+
+pub struct ParseNodeInfo {
+    name: String,
+    sub_info: Vec<ParseNodeSubInfo>,
+}
+
+impl ParseNodeInfo {
+    fn new(name: String, sub_info: Vec<ParseNodeSubInfo>) -> Self {
+        ParseNodeInfo { name, sub_info }
+    }
 }
 
 #[cfg(test)]
