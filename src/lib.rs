@@ -20,6 +20,8 @@ impl InnerStack {
 #[derive(PartialEq)]
 pub enum ParseStatus {
     Ok = 0,
+    SubtreeStart,
+    SubtreeEnd,
     Error,
 }
 

@@ -40,4 +40,15 @@ fn main() {
         println!("{}", node.to_json().0);
     }
     println!("{:?}\n", args);
+
+    let acl = [
+        0x80, 0x00, 0x10, 0x00, 0x0c, 0x00, 0x01, 0x00, 0x04, 0x04, 0x08, 0x00, 0x69, 0x00, 0x00,
+        0x00, 0x01, 0x02, 0xc0, 0x00,
+    ];
+    let res = hci::parse(HciPacket::Acl, &acl, &mut args);
+
+    for node in res {
+        println!("{}", node.to_json().0);
+    }
+    println!("{:?}\n", args);
 }

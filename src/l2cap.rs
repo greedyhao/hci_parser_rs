@@ -19,17 +19,22 @@ struct L2capChannel {
     dest_cid: u16,
 
     psm: u16,
+
+    local_mtu: u16,
+    flush_timeout: u16,
 }
 
 impl Debug for L2capChannel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "L2capChannel {{ source_cid: {:#x}, dest_cid: {:#x}, psm: {:#x}({})}}",
+            "L2capChannel {{ source_cid: {:#x}, dest_cid: {:#x}, psm: {:#x}({}), local_mtu:{:#x}, flush_timeout:{:#x}}}",
             self.source_cid,
             self.dest_cid,
             self.psm,
-            get_psm_name(self.psm)
+            get_psm_name(self.psm),
+            self.local_mtu,
+            self.flush_timeout,
         )
     }
 }
@@ -198,10 +203,24 @@ impl<T: ParseNode> ParseLayer for SignalCommand<T> {
             code_s, identifier_s, data_length_s
         );
 
+        let mut skip_comma = false;
         let mut cnt = 4;
         for sub in info.sub_info {
-            major.push_str(format!(r#", "{}":"{}""#, sub.key, sub.value).as_str());
-            minor.push_str(format!(r#", "{}":"({},{})""#, sub.key, cnt, sub.length).as_str());
+            if sub.status == ParseStatus::SubtreeStart {
+                skip_comma = true;
+                major.push_str(format!(r#", "{}":{{"#, sub.key).as_str());
+                continue;
+            } else if sub.status == ParseStatus::SubtreeEnd {
+                major.push_str("}");
+                continue;
+            }
+            if !skip_comma {
+                major.push_str(", ");
+                minor.push_str(", ");
+            }
+            skip_comma = false;
+            major.push_str(format!(r#""{}":"{}""#, sub.key, sub.value).as_str());
+            minor.push_str(format!(r#""{}":"({},{})""#, sub.key, cnt, sub.length).as_str());
             if sub.status != ParseStatus::Ok {
                 minor.push_str(format!(r#",{}"#, sub.status as u8).as_str());
             }
@@ -346,12 +365,170 @@ impl ParseNode for ConnectionRsp {
     }
 }
 
+// TODO: 添加剩余的 option
+enum ConfigParamOption {
+    MTU(u16),
+    FlushTimeout(u16),
+}
+
+impl ConfigParamOption {
+    fn new(option: &[u8]) -> Self {
+        let len;
+        let param = match option[0] {
+            0x01 => {
+                len = 2;
+                ConfigParamOption::MTU(u16::from_le_bytes(option[2..4].try_into().unwrap()))
+            }
+            0x02 => {
+                len = 2;
+                ConfigParamOption::FlushTimeout(u16::from_le_bytes(
+                    option[2..4].try_into().unwrap(),
+                ))
+            }
+            _ => panic!("Unknown config param option"),
+        };
+
+        if len != option[1] {
+            panic!("Config param option length mismatch");
+        }
+        param
+    }
+
+    fn get_option_len(&self) -> u8 {
+        match self {
+            ConfigParamOption::MTU(_) => 2,
+            ConfigParamOption::FlushTimeout(_) => 2,
+        }
+    }
+
+    fn get_subinfo(&self) -> Vec<ParseNodeSubInfo> {
+        let option_type_s = "Option Type";
+        let option_length_s = "Option Length";
+        match self {
+            ConfigParamOption::MTU(mtu) => {
+                vec![
+                    ParseNodeSubInfo::new(
+                        option_type_s.to_string(),
+                        "MAXIMUM TRANSMISSION UNIT (MTU)".to_string(),
+                        1,
+                        ParseStatus::Ok,
+                    ),
+                    ParseNodeSubInfo::new(
+                        option_length_s.to_string(),
+                        format!("{:#x}", self.get_option_len()),
+                        1,
+                        ParseStatus::Ok,
+                    ),
+                    ParseNodeSubInfo::new(
+                        "MTU".to_string(),
+                        format!("{:#x}", mtu),
+                        2,
+                        ParseStatus::Ok,
+                    ),
+                ]
+            }
+            ConfigParamOption::FlushTimeout(flush_timeout) => {
+                vec![
+                    ParseNodeSubInfo::new(
+                        option_type_s.to_string(),
+                        "FLUSH TIMEOUT".to_string(),
+                        1,
+                        ParseStatus::Ok,
+                    ),
+                    ParseNodeSubInfo::new(
+                        option_length_s.to_string(),
+                        format!("{:#x}", self.get_option_len()),
+                        1,
+                        ParseStatus::Ok,
+                    ),
+                    ParseNodeSubInfo::new(
+                        "FLUSH TIMEOUT".to_string(),
+                        format!("{:#x}", flush_timeout),
+                        2,
+                        ParseStatus::Ok,
+                    ),
+                ]
+            }
+        }
+    }
+}
+
+impl Debug for ConfigParamOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConfigParamOption::MTU(mtu) => write!(f, r#""MTU":"{:#x}""#, mtu),
+            ConfigParamOption::FlushTimeout(flush_timeout) => {
+                write!(f, r#""Flush Timeout":"{:#x}"#, flush_timeout)
+            }
+        }
+    }
+}
+
 #[allow(dead_code)]
 // code 0x04
 struct ConfigurationReq {
     dest_cid: u16,
     flags: u16,
-    configuration_option: u32,
+    configuration_option: Option<ConfigParamOption>,
+}
+
+impl ParseNode for ConfigurationReq {
+    fn get_info(&self) -> ParseNodeInfo {
+        let dest_cid_s = "Destination CID";
+        let flags_s = "Flags";
+        let configuration_option_s = "Configuration Option";
+
+        let mut ret = ParseNodeInfo::new(
+            "L2CAP_CONFIGURATION_REQ".to_string(),
+            vec![
+                ParseNodeSubInfo::new(
+                    dest_cid_s.to_string(),
+                    format!("{:#x}", self.dest_cid),
+                    2,
+                    ParseStatus::Ok,
+                ),
+                // TODO: flag 检查与解析
+                ParseNodeSubInfo::new(
+                    flags_s.to_string(),
+                    format!("{:#x}", self.flags),
+                    2,
+                    ParseStatus::Ok,
+                ),
+            ],
+        );
+
+        // TODO:
+        if self.configuration_option.is_some() {
+            let option = self.configuration_option.as_ref().unwrap();
+            let start = ParseNodeSubInfo::new(
+                format!("{}", configuration_option_s),
+                "".to_string(),
+                0,
+                ParseStatus::SubtreeStart,
+            );
+            ret.sub_info.push(start);
+            for option in option.get_subinfo() {
+                ret.sub_info.push(option);
+            }
+            let end =
+                ParseNodeSubInfo::new("".to_string(), "".to_string(), 0, ParseStatus::SubtreeEnd);
+            ret.sub_info.push(end);
+        }
+        ret
+    }
+    fn new(data: &[u8]) -> Self {
+        let option = if data.len() > 4 {
+            let option = ConfigParamOption::new(&data[4..]);
+            Some(option)
+        } else {
+            None
+        };
+        ConfigurationReq {
+            dest_cid: u16::from_le_bytes(data[0..2].try_into().unwrap()),
+            flags: u16::from_le_bytes(data[2..4].try_into().unwrap()),
+            configuration_option: option,
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -476,6 +653,21 @@ pub fn parse(data: &[u8], args: &mut InnerStack) -> Vec<Box<dyn ParseLayer>> {
                     for channel in &mut args.l2cap_arg.channels {
                         if channel.source_cid == signal.data.source_cid {
                             channel.dest_cid = signal.data.dest_cid;
+                        }
+                    }
+                    Box::new(signal)
+                }
+                ConfigurationReqCode => {
+                    let signal: SignalCommand<ConfigurationReq> = SignalCommand::new(&data[4..]);
+                    use ConfigParamOption::*;
+                    for channel in &mut args.l2cap_arg.channels {
+                        if channel.dest_cid == signal.data.dest_cid {
+                            match signal.data.configuration_option {
+                                Some(MTU(mtu)) => {
+                                    channel.local_mtu = mtu;
+                                }
+                                _ => {}
+                            }
                         }
                     }
                     Box::new(signal)
