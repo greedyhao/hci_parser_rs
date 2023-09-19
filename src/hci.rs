@@ -77,7 +77,8 @@ impl<T: ParseNode> ParseLayer for HciCmd<T> {
         let param_total_len_s = "Parameter_Total_Length";
         let info = self.param.get_info();
         let mut major = format!(
-            r#"{{"{}":"{:#x}", "{}":"{:#x}", "{}":"{:#x}", "{}":"{}", "{}":"{:#x}""#,
+            r#""{}":{{"{}":"{:#x}", "{}":"{:#x}", "{}":"{:#x}", "{}":"{}", "{}":"{:#x}""#,
+            "HCI",
             opcode_s,
             self.opcode,
             ocf_s,
@@ -285,7 +286,8 @@ impl ParseLayer for HciAcl {
         let data_total_length_s = "Data Total Length";
 
         let mut major = format!(
-            r#"{{"{}":"{:#x}", "{}":"{:#x}", "{}":"{:#x}", "{}":"{:#x}""#,
+            r#""{}":{{"{}":"{:#x}", "{}":"{:#x}", "{}":"{:#x}", "{}":"{:#x}""#,
+            "HCI",
             handle_s,
             self.handle_and_flags & 0xfff,
             pb_flag_s,

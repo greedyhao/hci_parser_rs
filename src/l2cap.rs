@@ -96,7 +96,8 @@ impl ParseLayer for L2capHeader {
         let channel_id_s = "Channel ID";
 
         let major = format!(
-            r#"{{"{}":"{:#x}", "{}":"{:#x}({})""#,
+            r#""{}":{{"{}":"{:#x}", "{}":"{:#x}({})""#,
+            "L2CAP",
             pdu_length_s,
             self.pdu_length,
             channel_id_s,

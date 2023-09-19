@@ -7,7 +7,7 @@
 输入 `[0x03, 0x0c, 0x00]` 可以得到下面的输出
 
 ```json
-{"Opcode":"0xc03", "OCF":"0x3", "OGF":"0x3", "Command":"Reset", "Parameter_Total_Length":"0x0"}
+"HCI":{"Opcode":"0xc03", "OCF":"0x3", "OGF":"0x3", "Command":"Reset", "Parameter_Total_Length":"0x0"}
 ```
 
 ## 目前的情况
