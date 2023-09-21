@@ -9,6 +9,7 @@ fn main() {
     let res = hci::parse(HciPacket::Cmd, &cmd, &mut args);
     for node in res {
         println!("{}", node.to_json().0);
+        println!("{}", node.to_json().1);
     }
     println!("{:?}\n", args);
 

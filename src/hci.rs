@@ -1,5 +1,6 @@
 use std::vec;
 
+use crate::format_parse_node;
 use crate::l2cap;
 use crate::InnerStack;
 use crate::ParseLayer;
@@ -77,31 +78,27 @@ impl<T: ParseNode> ParseLayer for HciCmd<T> {
         let param_total_len_s = "Parameter_Total_Length";
         let info = self.param.get_info();
         let mut major = format!(
-            r#""{}":{{"{}":"{:#x}", "{}":"{:#x}", "{}":"{:#x}", "{}":"{}", "{}":"{:#x}""#,
+            r#""{}": {{{}, {}, {}, {}, {}"#,
             "HCI",
-            opcode_s,
-            self.opcode,
-            ocf_s,
-            ocf,
-            ogf_s,
-            ogf,
-            command_s,
-            info.name,
-            param_total_len_s,
-            self.param_total_len
+            format_parse_node(opcode_s, self.opcode, None),
+            format_parse_node(ocf_s, ocf, None),
+            format_parse_node(ogf_s, ogf, None),
+            format_parse_node(command_s, info.name, None),
+            format_parse_node(param_total_len_s, self.param_total_len, None)
         );
         let mut minor = format!(
-            r#"{{"{}":"(0,2)", "{}":"(0,1)", "{}","(1,1)", "{}":"(0,2)", "{}":"(2,1),0""#,
-            opcode_s, ocf_s, ogf_s, command_s, param_total_len_s
+            r#"{{{}, {}, {}, {}, {}"#,
+            format_parse_node(opcode_s, "(0,2)", None),
+            format_parse_node(ocf_s, "(0,1)", None),
+            format_parse_node(ogf_s, "(1,1)", None),
+            format_parse_node(command_s, "(0,2)", None),
+            format_parse_node(param_total_len_s, "(2,1),0", None),
         );
 
         let mut cnt = 3;
         for sub in info.sub_info {
-            major.push_str(format!(r#", "{}":"{}""#, sub.key, sub.value).as_str());
-            minor.push_str(format!(r#", "{}":"({},{})""#, sub.key, cnt, sub.length).as_str());
-            if sub.status != ParseStatus::Ok {
-                minor.push_str(format!(r#",{}"#, sub.status as u8).as_str());
-            }
+            sub.append_major_info(&mut major, false);
+            sub.append_minor_info(&mut minor, false, cnt);
             cnt += sub.length;
         }
         major.push_str("}");
@@ -171,16 +168,18 @@ impl ParseNode for HciCmdOgf1Inquiry {
         ParseNodeInfo::new(
             "Inquiry".to_string(),
             vec![
-                ParseNodeSubInfo::new("LAP".to_string(), format!("{:#x}", lap), 3, lap_check),
+                ParseNodeSubInfo::new("LAP", lap, None, 3, lap_check),
                 ParseNodeSubInfo::new(
-                    "Inquiry_Length".to_string(),
-                    format!("{:#x}", self.inquiry_length),
+                    "Inquiry_Length",
+                    self.inquiry_length,
+                    None,
                     1,
                     inquiry_length_check,
                 ),
                 ParseNodeSubInfo::new(
-                    "Num_Responses".to_string(),
-                    format!("{:#x}", self.num_responses),
+                    "Num_Responses",
+                    self.num_responses,
+                    None,
                     1,
                     ParseStatus::Ok,
                 ),
@@ -286,20 +285,19 @@ impl ParseLayer for HciAcl {
         let data_total_length_s = "Data Total Length";
 
         let mut major = format!(
-            r#""{}":{{"{}":"{:#x}", "{}":"{:#x}", "{}":"{:#x}", "{}":"{:#x}""#,
-            "HCI",
-            handle_s,
-            self.handle_and_flags & 0xfff,
-            pb_flag_s,
-            (self.handle_and_flags >> 12) & 0x3,
-            pc_flag_s,
-            self.handle_and_flags >> 14,
-            data_total_length_s,
-            self.data_total_length
+            r#""{}": {{{}, {}, {}, {}"#,
+            "ACL",
+            format_parse_node(handle_s, self.handle_and_flags & 0xfff, None),
+            format_parse_node(pb_flag_s, (self.handle_and_flags >> 12) & 0x3, None),
+            format_parse_node(pc_flag_s, self.handle_and_flags >> 14, None),
+            format_parse_node(data_total_length_s, self.data_total_length, None)
         );
         let mut minor = format!(
-            r#"{{"{}":"(0,2)", "{}":"(1,1)", "{}","(1,1)", "{}":"(2,2)""#,
-            handle_s, pb_flag_s, pc_flag_s, data_total_length_s
+            r#"{{{}, {}, {}, {}"#,
+            format_parse_node(handle_s, "(0,2)", None),
+            format_parse_node(pb_flag_s, "(1,1)", None),
+            format_parse_node(pc_flag_s, "(1,1)", None),
+            format_parse_node(data_total_length_s, "(2,2)", None)
         );
 
         major.push_str("}");

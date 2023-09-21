@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 use std::vec;
 
+use crate::format_parse_node;
 use crate::InnerStack;
 use crate::ParseLayer;
 use crate::ParseNode;
@@ -101,18 +102,20 @@ impl ParseLayer for L2capHeader {
         let channel_id_s = "Channel ID";
 
         let major = format!(
-            r#""{}":{{"{}":"{:#x}", "{}":"{:#x}({})""#,
+            r#""{}": {{{}, {}"#,
             "L2CAP",
-            pdu_length_s,
-            self.pdu_length,
-            channel_id_s,
-            self.channel_id,
-            CID::from_u16(self.channel_id)
+            format_parse_node(pdu_length_s, self.pdu_length, None),
+            format_parse_node(
+                channel_id_s,
+                self.channel_id,
+                Some(format!("{}", CID::from_u16(self.channel_id)).as_str())
+            )
         );
 
         let minor = format!(
-            r#"{{"{}":"(0,2)", "{}":"(2,2)""#,
-            self.pdu_length, self.channel_id
+            r#"{{{}, {}"#,
+            format_parse_node(pdu_length_s, "(0,2)", None),
+            format_parse_node(channel_id_s, "(2,2)", None)
         );
 
         (major, minor)
@@ -188,42 +191,34 @@ impl<T: ParseNode> ParseLayer for SignalCommand<T> {
         let info = self.data.get_info();
 
         let mut major = format!(
-            r#", "{}":"{:#x}({})", "{}":"{:#x}", "{}":"{:#x}""#,
-            code_s,
-            self.code,
-            info.name,
-            identifier_s,
-            self.identifier,
-            data_length_s,
-            self.data_length,
+            r#", {}, {}, {}"#,
+            format_parse_node(code_s, self.code, Some(info.name.as_str())),
+            format_parse_node(identifier_s, self.identifier, None),
+            format_parse_node(data_length_s, self.data_length, None)
         );
 
         let mut minor = format!(
-            r#", "{}":"(0,1)", "{}":"(1,1)", "{}":"(2,2)""#,
-            code_s, identifier_s, data_length_s
+            r#", {}, {}, {}"#,
+            format_parse_node(code_s, "(0,1)", None),
+            format_parse_node(identifier_s, "(1,1)", None),
+            format_parse_node(data_length_s, "(2,2)", None)
         );
 
-        let mut skip_comma = false;
+        let mut without_separator = false;
         let mut cnt = 4;
         for sub in info.sub_info {
             if sub.status == ParseStatus::SubtreeStart {
-                skip_comma = true;
-                major.push_str(format!(r#", "{}":{{"#, sub.key).as_str());
+                without_separator = true;
+                major.push_str(format!(r#", "{}": {{"#, sub.key).as_str());
                 continue;
             } else if sub.status == ParseStatus::SubtreeEnd {
                 major.push_str("}");
                 continue;
             }
-            if !skip_comma {
-                major.push_str(", ");
-                minor.push_str(", ");
-            }
-            skip_comma = false;
-            major.push_str(format!(r#""{}":"{}""#, sub.key, sub.value).as_str());
-            minor.push_str(format!(r#""{}":"({},{})""#, sub.key, cnt, sub.length).as_str());
-            if sub.status != ParseStatus::Ok {
-                minor.push_str(format!(r#",{}"#, sub.status as u8).as_str());
-            }
+
+            sub.append_major_info(&mut major, without_separator);
+            sub.append_minor_info(&mut minor, without_separator, cnt);
+            without_separator = false;
             cnt += sub.length;
         }
 
@@ -269,17 +264,13 @@ impl ParseNode for ConnectionReq {
             "L2CAP_CONNECTION_REQ".to_string(),
             vec![
                 ParseNodeSubInfo::new(
-                    psm_s.to_string(),
-                    format!("{:#x}({})", self.psm, psm_name_s),
+                    psm_s,
+                    self.psm,
+                    Some(psm_name_s.as_str()),
                     2,
                     check_parse_status(psm_name_s.as_str()),
                 ),
-                ParseNodeSubInfo::new(
-                    source_cid_s.to_string(),
-                    format!("{:#x}", self.source_cid),
-                    2,
-                    ParseStatus::Ok,
-                ),
+                ParseNodeSubInfo::new(source_cid_s, self.source_cid, None, 2, ParseStatus::Ok),
             ],
         )
     }
@@ -328,27 +319,19 @@ impl ParseNode for ConnectionRsp {
         ParseNodeInfo::new(
             "L2CAP_CONNECTION_RSP".to_string(),
             vec![
+                ParseNodeSubInfo::new(dest_cid_s, self.dest_cid, None, 2, ParseStatus::Ok),
+                ParseNodeSubInfo::new(source_cid_s, self.source_cid, None, 2, ParseStatus::Ok),
                 ParseNodeSubInfo::new(
-                    dest_cid_s.to_string(),
-                    format!("{:#x}", self.dest_cid),
-                    2,
-                    ParseStatus::Ok,
-                ),
-                ParseNodeSubInfo::new(
-                    source_cid_s.to_string(),
-                    format!("{:#x}", self.source_cid),
-                    2,
-                    ParseStatus::Ok,
-                ),
-                ParseNodeSubInfo::new(
-                    result_s.to_string(),
-                    format!("{:#x}({})", self.result, result_name_s),
+                    result_s,
+                    self.result,
+                    Some(result_name_s),
                     2,
                     check_parse_status(result_name_s),
                 ),
                 ParseNodeSubInfo::new(
-                    status_s.to_string(),
-                    format!("{:#x}({})", self.status, status_name_s),
+                    status_s,
+                    self.status,
+                    Some(status_name_s),
                     2,
                     check_parse_status(status_name_s),
                 ),
@@ -408,45 +391,33 @@ impl ConfigParamOption {
             ConfigParamOption::MTU(mtu) => {
                 vec![
                     ParseNodeSubInfo::new(
-                        option_type_s.to_string(),
-                        "MAXIMUM TRANSMISSION UNIT (MTU)".to_string(),
+                        option_type_s,
+                        "MAXIMUM TRANSMISSION UNIT (MTU)",
+                        None,
                         1,
                         ParseStatus::Ok,
                     ),
                     ParseNodeSubInfo::new(
-                        option_length_s.to_string(),
-                        format!("{:#x}", self.get_option_len()),
+                        option_length_s,
+                        self.get_option_len(),
+                        None,
                         1,
                         ParseStatus::Ok,
                     ),
-                    ParseNodeSubInfo::new(
-                        "MTU".to_string(),
-                        format!("{:#x}", mtu),
-                        2,
-                        ParseStatus::Ok,
-                    ),
+                    ParseNodeSubInfo::new("MTU", mtu, None, 2, ParseStatus::Ok),
                 ]
             }
             ConfigParamOption::FlushTimeout(flush_timeout) => {
                 vec![
+                    ParseNodeSubInfo::new(option_type_s, "FLUSH TIMEOUT", None, 1, ParseStatus::Ok),
                     ParseNodeSubInfo::new(
-                        option_type_s.to_string(),
-                        "FLUSH TIMEOUT".to_string(),
+                        option_length_s,
+                        self.get_option_len(),
+                        None,
                         1,
                         ParseStatus::Ok,
                     ),
-                    ParseNodeSubInfo::new(
-                        option_length_s.to_string(),
-                        format!("{:#x}", self.get_option_len()),
-                        1,
-                        ParseStatus::Ok,
-                    ),
-                    ParseNodeSubInfo::new(
-                        "FLUSH TIMEOUT".to_string(),
-                        format!("{:#x}", flush_timeout),
-                        2,
-                        ParseStatus::Ok,
-                    ),
+                    ParseNodeSubInfo::new("FLUSH TIMEOUT", flush_timeout, None, 2, ParseStatus::Ok),
                 ]
             }
         }
@@ -481,19 +452,9 @@ impl ParseNode for ConfigurationReq {
         let mut ret = ParseNodeInfo::new(
             "L2CAP_CONFIGURATION_REQ".to_string(),
             vec![
-                ParseNodeSubInfo::new(
-                    dest_cid_s.to_string(),
-                    format!("{:#x}", self.dest_cid),
-                    2,
-                    ParseStatus::Ok,
-                ),
+                ParseNodeSubInfo::new(dest_cid_s, self.dest_cid, None, 2, ParseStatus::Ok),
                 // TODO: flag 检查与解析
-                ParseNodeSubInfo::new(
-                    flags_s.to_string(),
-                    format!("{:#x}", self.flags),
-                    2,
-                    ParseStatus::Ok,
-                ),
+                ParseNodeSubInfo::new(flags_s, self.flags, None, 2, ParseStatus::Ok),
             ],
         );
 
@@ -501,8 +462,9 @@ impl ParseNode for ConfigurationReq {
         if self.configuration_option.is_some() {
             let option = self.configuration_option.as_ref().unwrap();
             let start = ParseNodeSubInfo::new(
-                format!("{}", configuration_option_s),
-                "".to_string(),
+                configuration_option_s,
+                "",
+                None,
                 0,
                 ParseStatus::SubtreeStart,
             );
@@ -510,8 +472,7 @@ impl ParseNode for ConfigurationReq {
             for option in option.get_subinfo() {
                 ret.sub_info.push(option);
             }
-            let end =
-                ParseNodeSubInfo::new("".to_string(), "".to_string(), 0, ParseStatus::SubtreeEnd);
+            let end = ParseNodeSubInfo::new("", "", None, 0, ParseStatus::SubtreeEnd);
             ret.sub_info.push(end);
         }
         ret
@@ -586,8 +547,9 @@ impl ParseNode for InformationReq {
         ParseNodeInfo::new(
             "L2CAP_INFORMATION_REQ".to_string(),
             vec![ParseNodeSubInfo::new(
-                String::from(info_type_s),
-                format!("{:#x}({})", self.info_type, info_type_name_s),
+                info_type_s,
+                self.info_type,
+                Some(info_type_name_s),
                 2,
                 check_parse_status(info_type_name_s),
             )],
@@ -612,12 +574,7 @@ impl ParseNode for InformationRsp {
     fn get_info(&self) -> ParseNodeInfo {
         ParseNodeInfo::new(
             "L2CAP_INFORMATION_RSP".to_string(),
-            vec![ParseNodeSubInfo::new(
-                String::new(),
-                String::new(),
-                0,
-                ParseStatus::Error,
-            )],
+            vec![ParseNodeSubInfo::new("", "", None, 0, ParseStatus::Error)],
         )
     }
     fn new(data: &[u8]) -> Self {

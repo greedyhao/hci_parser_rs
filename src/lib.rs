@@ -25,6 +25,17 @@ pub enum ParseStatus {
     Error,
 }
 
+impl ParseStatus {
+    fn get_value(&self) -> u8 {
+        match self {
+            ParseStatus::Ok => 0,
+            ParseStatus::SubtreeStart => 1,
+            ParseStatus::SubtreeEnd => 2,
+            ParseStatus::Error => 3,
+        }
+    }
+}
+
 pub trait ParseLayer {
     /// json format (major, minor)
     ///
@@ -49,12 +60,46 @@ pub struct ParseNodeSubInfo {
 }
 
 impl ParseNodeSubInfo {
-    fn new(key: String, value: String, length: u8, status: ParseStatus) -> Self {
+    fn new<T: ParseNodeFormat>(
+        key: &str,
+        value: T,
+        option: Option<&str>,
+        length: u8,
+        status: ParseStatus,
+    ) -> Self {
+        let value = if option.is_some() {
+            let option = option.unwrap();
+            format!(r#""{}({option})""#, value.node_format())
+        } else {
+            format!("{}", value.node_format())
+        };
         ParseNodeSubInfo {
-            key,
+            key: key.to_string(),
             value,
             length,
             status,
+        }
+    }
+
+    fn append_major_info(&self, major: &mut String, without_separator: bool) {
+        if !without_separator {
+            major.push_str(&format!(r#", "{}": {}"#, self.key, self.value));
+        } else {
+            major.push_str(&format!(r#""{}": {}"#, self.key, self.value));
+        }
+    }
+
+    fn append_minor_info(&self, minor: &mut String, without_separator: bool, index: u8) {
+        if !without_separator {
+            minor.push_str(&format!(
+                r#", "{}": "({},{})""#,
+                self.key, index, self.length
+            ));
+        } else {
+            minor.push_str(&format!(r#""{}": "({},{})""#, self.key, index, self.length));
+        }
+        if self.status != ParseStatus::Ok {
+            minor.push_str(format!(r#",{}"#, self.status.get_value()).as_str());
         }
     }
 }
@@ -68,4 +113,44 @@ impl ParseNodeInfo {
     fn new(name: String, sub_info: Vec<ParseNodeSubInfo>) -> Self {
         ParseNodeInfo { name, sub_info }
     }
+}
+
+use duplicate::duplicate_item;
+
+pub trait ParseNodeFormat {
+    fn node_format(&self) -> String;
+}
+
+#[duplicate_item(
+    int_type;
+    [ u8 ]; [ &u8 ];
+    [ u16 ]; [ &u16 ];
+    [ u32 ]; [ &u32 ];
+)]
+impl ParseNodeFormat for int_type {
+    fn node_format(&self) -> String {
+        format!("{:#x}", self)
+    }
+}
+
+#[duplicate_item(
+    str_type;
+    [ &str ];
+    [ String ];
+)]
+impl ParseNodeFormat for str_type {
+    fn node_format(&self) -> String {
+        format!(r#""{}""#, self)
+    }
+}
+
+pub fn format_parse_node<T: ParseNodeFormat>(key: &str, value: T, option: Option<&str>) -> String {
+    let value = if option.is_some() {
+        let option = option.unwrap();
+        format!(r#""{}({option})""#, value.node_format())
+    } else {
+        format!("{}", value.node_format())
+    };
+
+    format!(r#""{}": {}"#, key, value)
 }
