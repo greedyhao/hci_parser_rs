@@ -22,6 +22,7 @@ struct L2capChannel {
     psm: u16,
 
     local_mtu: u16,
+    remote_mtu: u16,
     flush_timeout: u16,
 }
 
@@ -29,12 +30,13 @@ impl Debug for L2capChannel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "L2capChannel {{ source_cid: {:#x}, dest_cid: {:#x}, psm: {:#x}({}), local_mtu:{:#x}, flush_timeout:{:#x}}}",
+            "L2capChannel {{ source_cid: {:#x}, dest_cid: {:#x}, psm: {:#x}({}), local_mtu:{:#x}, remote_mtu:{:#x}, flush_timeout:{:#x}}}",
             self.source_cid,
             self.dest_cid,
             self.psm,
             get_psm_name(self.psm),
             self.local_mtu,
+            self.remote_mtu,
             self.flush_timeout,
         )
     }
@@ -147,6 +149,7 @@ enum SignalCommandCode {
 
 impl SignalCommandCode {
     fn from_u8(code: u8) -> Self {
+        println!("[code={}]", code);
         use SignalCommandCode::*;
         match code {
             0x01 => CommandRejectRspCode,
@@ -498,7 +501,70 @@ struct ConfigurationRsp {
     source_cid: u16,
     flags: u16,
     result: u16,
-    config: u16,
+    configuration_option: Option<ConfigParamOption>,
+}
+
+impl ParseNode for ConfigurationRsp{
+    fn get_info(&self) -> ParseNodeInfo {
+        let source_cid_s = "Source CID";
+        let flags_s = "Flags";
+        let result_s = "Result";
+        let configuration_option_s = "Configuration Option";
+
+        let result_name = match self.result {
+            0x0000 => "Success",
+            0x0001 => "Failure - unacceptable parameters",
+            0x0002 => "Failure - rejected (no reason provided)",
+            0x0003 => "Failure - unknown options",
+            0x0004 => "Pending",
+            0x0005 => "Failure - flow spec rejected",
+            _ => "Reserved for future use",
+        };
+
+        let mut ret = ParseNodeInfo::new(
+            "L2CAP_CONFIGURATION_RSP",
+            vec![
+                ParseNodeSubInfo::new(source_cid_s, self.source_cid, None, 2, ParseStatus::Ok),
+                // TODO: flag 检查与解析
+                ParseNodeSubInfo::new(flags_s, self.flags, None, 2, ParseStatus::Ok),
+                ParseNodeSubInfo::new(result_s, self.result, Some(result_name), 2, ParseStatus::Ok),
+            ],
+        );
+        
+        // TODO:
+        if self.configuration_option.is_some() {
+            let option = self.configuration_option.as_ref().unwrap();
+            let start = ParseNodeSubInfo::new(
+                configuration_option_s,
+                "",
+                None,
+                0,
+                ParseStatus::SubtreeStart,
+            );
+            ret.sub_info.push(start);
+            for option in option.get_subinfo() {
+                ret.sub_info.push(option);
+            }
+            let end = ParseNodeSubInfo::new("", "", None, 0, ParseStatus::SubtreeEnd);
+            ret.sub_info.push(end);
+        }
+        ret
+    }
+
+    fn new(data: &[u8]) -> Self {
+        let option = if data.len() > 6 {
+            let option = ConfigParamOption::new(&data[6..]);
+            Some(option)
+        } else {
+            None
+        };
+        ConfigurationRsp {
+            source_cid: u16::from_le_bytes(data[0..2].try_into().unwrap()),
+            flags: u16::from_le_bytes(data[2..4].try_into().unwrap()),
+            result: u16::from_le_bytes(data[4..6].try_into().unwrap()),
+            configuration_option: option,
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -587,6 +653,7 @@ impl ParseNode for InformationRsp {
 }
 
 pub fn parse(data: &[u8], args: &mut HostStack) -> Vec<Box<dyn ParseLayer>> {
+    println!("{:?}", data);
     let header = L2capHeader::new(data);
     let cid = CID::from_u16(header.channel_id);
 
@@ -622,6 +689,21 @@ pub fn parse(data: &[u8], args: &mut HostStack) -> Vec<Box<dyn ParseLayer>> {
                             match signal.data.configuration_option {
                                 Some(MTU(mtu)) => {
                                     channel.local_mtu = mtu;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    Box::new(signal)
+                }
+                ConfigurationRspCode => {
+                    let signal: SignalCommand<ConfigurationRsp> = SignalCommand::new(&data[4..]);
+                    use ConfigParamOption::*;
+                    for channel in &mut args.l2cap_arg.channels {
+                        if channel.dest_cid == signal.data.source_cid {
+                            match signal.data.configuration_option {
+                                Some(MTU(mtu)) => {
+                                    channel.remote_mtu = mtu;
                                 }
                                 _ => {}
                             }
