@@ -2,7 +2,7 @@ use std::vec;
 
 use crate::format_parse_node;
 use crate::l2cap;
-use crate::InnerStack;
+use crate::HostStack;
 use crate::ParseLayer;
 use crate::ParseNode;
 use crate::ParseNodeInfo;
@@ -115,7 +115,7 @@ impl ParseNode for HciParseDummy {
         HciParseDummy {}
     }
     fn get_info(&self) -> ParseNodeInfo {
-        ParseNodeInfo::new("Dummy".to_string(), vec![])
+        ParseNodeInfo::new("Dummy", vec![])
     }
 }
 
@@ -166,7 +166,7 @@ impl ParseNode for HciCmdOgf1Inquiry {
         };
 
         ParseNodeInfo::new(
-            "Inquiry".to_string(),
+            "Inquiry",
             vec![
                 ParseNodeSubInfo::new("LAP", lap, None, 3, lap_check),
                 ParseNodeSubInfo::new(
@@ -222,7 +222,7 @@ impl ParseNode for HciCmdOgf3Reset {
         HciCmdOgf3Reset {}
     }
     fn get_info(&self) -> ParseNodeInfo {
-        ParseNodeInfo::new("Reset".to_string(), vec![])
+        ParseNodeInfo::new("Reset", vec![])
     }
 }
 
@@ -309,7 +309,7 @@ impl ParseLayer for HciAcl {
 pub fn parse(
     packet_type: HciPacket,
     data: &[u8],
-    args: &mut InnerStack,
+    args: &mut HostStack,
 ) -> Vec<Box<dyn ParseLayer>> {
     use HciPacket::*;
     let node: Vec<Box<dyn ParseLayer>> = match packet_type {
@@ -388,9 +388,9 @@ mod tests {
     fn hci_cmd_ogf3_reset_test() {
         use crate::hci;
         use crate::HciPacket::*;
-        use crate::InnerStack;
+        use crate::HostStack;
 
-        let mut args = InnerStack::new();
+        let mut args = HostStack::new();
         let cmd = [0x03, 0x0c, 0x00];
         let res = hci::parse(Cmd, &cmd, &mut args);
 

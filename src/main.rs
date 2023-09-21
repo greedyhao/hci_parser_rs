@@ -1,9 +1,9 @@
 use hci_parser_rs::hci;
 use hci_parser_rs::HciPacket;
-use hci_parser_rs::InnerStack;
+use hci_parser_rs::HostStack;
 
 fn main() {
-    let mut args = InnerStack::new();
+    let mut args = HostStack::new();
     let cmd = [0x03, 0x0c, 0x00];
     // let cmd = [0x01, 0x04, 0x05, 0x01, 0x02, 0x03, 0x04, 0xff];
     let res = hci::parse(HciPacket::Cmd, &cmd, &mut args);

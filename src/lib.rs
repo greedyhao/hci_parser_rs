@@ -5,13 +5,13 @@ pub mod l2cap;
 use l2cap::L2capArg;
 
 #[derive(Debug)]
-pub struct InnerStack {
+pub struct HostStack {
     l2cap_arg: L2capArg,
 }
 
-impl InnerStack {
+impl HostStack {
     pub fn new() -> Self {
-        InnerStack {
+        HostStack {
             l2cap_arg: L2capArg::default(),
         }
     }
@@ -110,8 +110,11 @@ pub struct ParseNodeInfo {
 }
 
 impl ParseNodeInfo {
-    fn new(name: String, sub_info: Vec<ParseNodeSubInfo>) -> Self {
-        ParseNodeInfo { name, sub_info }
+    fn new(name: &str, sub_info: Vec<ParseNodeSubInfo>) -> Self {
+        ParseNodeInfo {
+            name: name.to_string(),
+            sub_info,
+        }
     }
 }
 

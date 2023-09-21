@@ -2,7 +2,7 @@ use std::fmt::Debug;
 use std::vec;
 
 use crate::format_parse_node;
-use crate::InnerStack;
+use crate::HostStack;
 use crate::ParseLayer;
 use crate::ParseNode;
 use crate::ParseNodeInfo;
@@ -233,7 +233,7 @@ struct SignalUndefined {}
 
 impl ParseNode for SignalUndefined {
     fn get_info(&self) -> ParseNodeInfo {
-        ParseNodeInfo::new("Undefine".to_string(), vec![])
+        ParseNodeInfo::new("Undefine", vec![])
     }
     fn new(_data: &[u8]) -> Self {
         SignalUndefined {}
@@ -261,7 +261,7 @@ impl ParseNode for ConnectionReq {
 
         let psm_name_s = get_psm_name(self.psm);
         ParseNodeInfo::new(
-            "L2CAP_CONNECTION_REQ".to_string(),
+            "L2CAP_CONNECTION_REQ",
             vec![
                 ParseNodeSubInfo::new(
                     psm_s,
@@ -317,7 +317,7 @@ impl ParseNode for ConnectionRsp {
         };
 
         ParseNodeInfo::new(
-            "L2CAP_CONNECTION_RSP".to_string(),
+            "L2CAP_CONNECTION_RSP",
             vec![
                 ParseNodeSubInfo::new(dest_cid_s, self.dest_cid, None, 2, ParseStatus::Ok),
                 ParseNodeSubInfo::new(source_cid_s, self.source_cid, None, 2, ParseStatus::Ok),
@@ -450,7 +450,7 @@ impl ParseNode for ConfigurationReq {
         let configuration_option_s = "Configuration Option";
 
         let mut ret = ParseNodeInfo::new(
-            "L2CAP_CONFIGURATION_REQ".to_string(),
+            "L2CAP_CONFIGURATION_REQ",
             vec![
                 ParseNodeSubInfo::new(dest_cid_s, self.dest_cid, None, 2, ParseStatus::Ok),
                 // TODO: flag 检查与解析
@@ -545,7 +545,7 @@ impl ParseNode for InformationReq {
         };
 
         ParseNodeInfo::new(
-            "L2CAP_INFORMATION_REQ".to_string(),
+            "L2CAP_INFORMATION_REQ",
             vec![ParseNodeSubInfo::new(
                 info_type_s,
                 self.info_type,
@@ -573,7 +573,7 @@ struct InformationRsp {
 impl ParseNode for InformationRsp {
     fn get_info(&self) -> ParseNodeInfo {
         ParseNodeInfo::new(
-            "L2CAP_INFORMATION_RSP".to_string(),
+            "L2CAP_INFORMATION_RSP",
             vec![ParseNodeSubInfo::new("", "", None, 0, ParseStatus::Error)],
         )
     }
@@ -586,7 +586,7 @@ impl ParseNode for InformationRsp {
     }
 }
 
-pub fn parse(data: &[u8], args: &mut InnerStack) -> Vec<Box<dyn ParseLayer>> {
+pub fn parse(data: &[u8], args: &mut HostStack) -> Vec<Box<dyn ParseLayer>> {
     let header = L2capHeader::new(data);
     let cid = CID::from_u16(header.channel_id);
 
