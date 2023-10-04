@@ -1,21 +1,19 @@
 use std::fmt::Debug;
-use std::vec;
 
-use crate::format_parse_node;
 use crate::HostStack;
-use crate::ParseLayer;
-use crate::ParseNode;
-use crate::ParseNodeInfo;
-use crate::ParseNodeSubInfo;
-use crate::ParseStatus;
+use crate::ParseNodeWithArgs;
 
-#[derive(Default, Debug)]
+// use crate::ParseBitsNode;
+use crate::ParseBytesNode;
+
+#[derive(Default, Debug, Clone)]
 pub struct L2capArg {
     channels: Vec<L2capChannel>,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 struct L2capChannel {
+    identifier: u8,
     source_cid: u16,
     dest_cid: u16,
 
@@ -30,7 +28,8 @@ impl Debug for L2capChannel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "L2capChannel {{ source_cid: {:#x}, dest_cid: {:#x}, psm: {:#x}({}), local_mtu:{:#x}, remote_mtu:{:#x}, flush_timeout:{:#x}}}",
+            "L2capChannel {{ identifier:{:#x}, source_cid: {:#x}, dest_cid: {:#x}, psm: {:#x}({}), local_mtu:{:#x}, remote_mtu:{:#x}, flush_timeout:{:#x}}}",
+            self.identifier,
             self.source_cid,
             self.dest_cid,
             self.psm,
@@ -42,265 +41,236 @@ impl Debug for L2capChannel {
     }
 }
 
-// 0x40-0xffff is dynamically allocated
-enum CID {
-    NullIdentifier = 0x00,
-    L2capSignalingChannel,
-    ConnetionlessChannel,
-    PreviouslyUsed1,
-    BrEdrSecurityManager = 0x07,
-    PreviouslyUsed2 = 0x3f,
-    DynamicallyAllocated = 0x40,
+#[derive(Debug)]
+pub enum L2cap {
+    L2capB(L2capB),
 }
 
-impl CID {
-    fn from_u16(cid: u16) -> Self {
-        use CID::*;
-        match cid {
-            0x00 => NullIdentifier,
-            0x01 => L2capSignalingChannel,
-            0x02 => ConnetionlessChannel,
-            0x03 => PreviouslyUsed1,
-            0x07 => BrEdrSecurityManager,
-            0x3f => PreviouslyUsed2,
-            0x40..=0xffff => DynamicallyAllocated,
-            _ => NullIdentifier,
+impl ParseNodeWithArgs for L2cap {
+    fn new(data: &[u8], args: &mut HostStack) -> Self {
+        L2cap::L2capB(L2capB::new(data, args))
+    }
+
+    fn as_json(&self, start_byte: u8) -> String {
+        match self {
+            L2cap::L2capB(l2cap) => l2cap.as_json(start_byte),
         }
-    }
-}
-
-impl std::fmt::Display for CID {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use CID::*;
-        let str = match &self {
-            NullIdentifier => "Null identifier or Undefined",
-            L2capSignalingChannel => "L2CAP Signaling channel",
-            ConnetionlessChannel => "Connectionless channel",
-            PreviouslyUsed1 | PreviouslyUsed2 => "Previously used",
-            BrEdrSecurityManager => "BR/EDR Security Manager",
-            DynamicallyAllocated => "Dynamically allocated",
-        };
-        write!(f, "{}", str)
-    }
-}
-
-struct L2capHeader {
-    pdu_length: u16,
-    channel_id: u16,
-}
-
-impl L2capHeader {
-    fn new(data: &[u8]) -> Self {
-        L2capHeader {
-            pdu_length: u16::from_le_bytes(data[0..2].try_into().unwrap()),
-            channel_id: u16::from_le_bytes(data[2..4].try_into().unwrap()),
-        }
-    }
-}
-
-impl ParseLayer for L2capHeader {
-    fn to_json(&self) -> (String, String) {
-        let pdu_length_s = "PDU Length";
-        let channel_id_s = "Channel ID";
-
-        let major = format!(
-            r#""{}": {{{}, {}"#,
-            "L2CAP",
-            format_parse_node(pdu_length_s, self.pdu_length, None),
-            format_parse_node(
-                channel_id_s,
-                self.channel_id,
-                Some(format!("{}", CID::from_u16(self.channel_id)).as_str())
-            )
-        );
-
-        let minor = format!(
-            r#"{{{}, {}"#,
-            format_parse_node(pdu_length_s, "(0,2)", None),
-            format_parse_node(channel_id_s, "(2,2)", None)
-        );
-
-        (major, minor)
-    }
-}
-
-struct L2capDummy {}
-
-impl ParseLayer for L2capDummy {
-    fn to_json(&self) -> (String, String) {
-        (String::new(), String::new())
-    }
-}
-
-enum SignalCommandCode {
-    SignalUndefinedCode = 0x00,
-    CommandRejectRspCode,
-    ConnectionReqCode,
-    ConnectionRspCode,
-    ConfigurationReqCode,
-    ConfigurationRspCode,
-    DisconnectionReqCode,
-    DisconnectionRspCode,
-    EchoReqCode,
-    EchoRspCode,
-    InformationReqCode,
-    InformationRspCode,
-}
-
-impl SignalCommandCode {
-    fn from_u8(code: u8) -> Self {
-        println!("[code={}]", code);
-        use SignalCommandCode::*;
-        match code {
-            0x01 => CommandRejectRspCode,
-            0x02 => ConnectionReqCode,
-            0x03 => ConnectionRspCode,
-            0x04 => ConfigurationReqCode,
-            0x05 => ConfigurationRspCode,
-            0x06 => DisconnectionReqCode,
-            0x07 => DisconnectionRspCode,
-            0x08 => EchoReqCode,
-            0x09 => EchoRspCode,
-            0x0A => InformationReqCode,
-            0x0B => InformationRspCode,
-            _ => SignalUndefinedCode,
-        }
-    }
-}
-
-struct SignalCommand<T> {
-    code: u8,
-    identifier: u8,
-    data_length: u16,
-    data: T,
-}
-
-impl<T: ParseNode> SignalCommand<T> {
-    fn new(data: &[u8]) -> Self {
-        SignalCommand {
-            code: data[0],
-            identifier: data[1],
-            data_length: u16::from_le_bytes(data[2..4].try_into().unwrap()),
-            data: T::new(&data[4..]),
-        }
-    }
-}
-
-impl<T: ParseNode> ParseLayer for SignalCommand<T> {
-    fn to_json(&self) -> (String, String) {
-        let code_s = "Code";
-        let identifier_s = "Identifier";
-        let data_length_s = "Data Length";
-        let info = self.data.get_info();
-
-        let mut major = format!(
-            r#", {}, {}, {}"#,
-            format_parse_node(code_s, self.code, Some(info.name.as_str())),
-            format_parse_node(identifier_s, self.identifier, None),
-            format_parse_node(data_length_s, self.data_length, None)
-        );
-
-        let mut minor = format!(
-            r#", {}, {}, {}"#,
-            format_parse_node(code_s, "(0,1)", None),
-            format_parse_node(identifier_s, "(1,1)", None),
-            format_parse_node(data_length_s, "(2,2)", None)
-        );
-
-        let mut without_separator = false;
-        let mut cnt = 4;
-        for sub in info.sub_info {
-            if sub.status == ParseStatus::SubtreeStart {
-                without_separator = true;
-                major.push_str(format!(r#", "{}": {{"#, sub.key).as_str());
-                continue;
-            } else if sub.status == ParseStatus::SubtreeEnd {
-                major.push_str("}");
-                continue;
-            }
-
-            sub.append_major_info(&mut major, without_separator);
-            sub.append_minor_info(&mut minor, without_separator, cnt);
-            without_separator = false;
-            cnt += sub.length;
-        }
-
-        major.push_str("}");
-        minor.push_str("}");
-        (major, minor)
     }
 }
 
 #[derive(Debug)]
-struct SignalUndefined {}
+pub struct L2capB {
+    pdu_len: u16,
+    cid: u16,
+    payload: Channel,
+}
 
-impl ParseNode for SignalUndefined {
-    fn get_info(&self) -> ParseNodeInfo {
-        ParseNodeInfo::new("Undefine", vec![])
+impl ParseNodeWithArgs for L2capB {
+    fn new(data: &[u8], args: &mut HostStack) -> Self {
+        let pdu_len = u16::from_le_bytes([data[0], data[1]]);
+        let cid = u16::from_le_bytes([data[2], data[3]]);
+        let payload = Channel::new(&data[4..], args, cid);
+        L2capB {
+            pdu_len,
+            cid,
+            payload,
+        }
     }
-    fn new(_data: &[u8]) -> Self {
-        SignalUndefined {}
+
+    fn as_json(&self, start_byte: u8) -> String {
+        let pdu_len_s =
+            ParseBytesNode::new(start_byte, 2).format("PDU Length", self.pdu_len, "", "");
+        let cid_s = ParseBytesNode::new(start_byte + 2, 2).format("Channel ID", self.cid, "", "");
+        let payload_s = self.payload.as_json(start_byte + 4);
+
+        format!("{}, {}, {}", pdu_len_s, cid_s, payload_s)
     }
 }
 
-#[allow(dead_code)]
-// code 0x01
-struct CommandRejectRsp {
-    reason: u16,
-    reason_data: Vec<u8>,
+#[derive(Debug)]
+enum Channel {
+    Undefined,
+    L2capSignalingChannel(L2capSignaling),
+    ConnetionlessChannel,
+    BrEdrSecurityManager, // 7
+    DynamicallyAllocated, // 0x40
 }
 
-#[allow(dead_code)]
-// code 0x02
-struct ConnectionReq {
-    psm: u16,
-    source_cid: u16,
-}
-
-impl ParseNode for ConnectionReq {
-    fn get_info(&self) -> ParseNodeInfo {
-        let psm_s = "PSM";
-        let source_cid_s = "Source CID";
-
-        let psm_name_s = get_psm_name(self.psm);
-        ParseNodeInfo::new(
-            "L2CAP_CONNECTION_REQ",
-            vec![
-                ParseNodeSubInfo::new(
-                    psm_s,
-                    self.psm,
-                    Some(psm_name_s.as_str()),
-                    2,
-                    check_parse_status(psm_name_s.as_str()),
-                ),
-                ParseNodeSubInfo::new(source_cid_s, self.source_cid, None, 2, ParseStatus::Ok),
-            ],
-        )
+impl Channel {
+    fn new(data: &[u8], args: &mut HostStack, cid: u16) -> Self {
+        match cid {
+            1 => Channel::L2capSignalingChannel(L2capSignaling::new(data, args)),
+            2 => Channel::ConnetionlessChannel,
+            7 => Channel::BrEdrSecurityManager,
+            0x40 => Channel::DynamicallyAllocated,
+            _ => Channel::Undefined,
+        }
     }
-    fn new(data: &[u8]) -> Self {
-        ConnectionReq {
-            psm: u16::from_le_bytes(data[0..2].try_into().unwrap()),
-            source_cid: u16::from_le_bytes(data[2..4].try_into().unwrap()),
+    fn as_json(&self, start_byte: u8) -> String {
+        match self {
+            Channel::L2capSignalingChannel(l2cap_signaling) => l2cap_signaling.as_json(start_byte),
+            _ => "".to_string(),
         }
     }
 }
 
-#[allow(dead_code)]
+trait SignalNode {
+    fn new(data: &[u8], args: &mut HostStack, id: u8) -> Self;
+    fn as_json(&self, start_byte: u8) -> String;
+}
+
+#[derive(Debug)]
+struct L2capSignaling {
+    code: u8,
+    identifier: u8,
+    data_length: u16,
+    data: L2capSigData,
+}
+
+impl ParseNodeWithArgs for L2capSignaling {
+    fn new(data: &[u8], args: &mut HostStack) -> Self {
+        let code = data[0];
+        let identifier = data[1];
+        let data_length = u16::from_le_bytes([data[2], data[3]]);
+        let data = L2capSigData::new(data, args, identifier);
+        L2capSignaling {
+            code,
+            identifier,
+            data_length,
+            data,
+        }
+    }
+    fn as_json(&self, start_byte: u8) -> String {
+        let code_s = ParseBytesNode::new(start_byte, 1).format("Code", self.code, "", "");
+        let identifier_s =
+            ParseBytesNode::new(start_byte + 1, 1).format("Identifier", self.identifier, "", "");
+        let data_length_s =
+            ParseBytesNode::new(start_byte + 2, 2).format("Data Length", self.data_length, "", "");
+        let data_s = self.data.as_json(start_byte);
+        format!(
+            r#"{}, {}, {}, {}"#,
+            code_s, identifier_s, data_length_s, data_s
+        )
+    }
+}
+
+#[derive(Debug)]
+enum L2capSigData {
+    Undefined,
+    CommandRejectRspCode,
+    ConnectionReqCode(SignalConnReq),
+    ConnectionRspCode(SignalConnRsp),
+    ConfigurationReqCode(SignalConfReq),
+    ConfigurationRspCode(SignalConfRsp),
+    DisconnectionReqCode,
+    DisconnectionRspCode,
+    EchoReqCode,
+    EchoRspCode,
+    InformationReqCode(SignalInfoReq),
+    InformationRspCode,
+}
+
+impl SignalNode for L2capSigData {
+    fn new(data: &[u8], args: &mut HostStack, id: u8) -> Self {
+        let code = data[0];
+        let data = &data[4..];
+        match code {
+            0x01 => L2capSigData::CommandRejectRspCode,
+            0x02 => L2capSigData::ConnectionReqCode(SignalConnReq::new(data, args, id)),
+            0x03 => L2capSigData::ConnectionRspCode(SignalConnRsp::new(data, args, id)),
+            0x04 => L2capSigData::ConfigurationReqCode(SignalConfReq::new(data, args, id)),
+            0x05 => L2capSigData::ConfigurationRspCode(SignalConfRsp::new(data, args, id)),
+            0x06 => L2capSigData::DisconnectionReqCode,
+            0x07 => L2capSigData::DisconnectionRspCode,
+            0x08 => L2capSigData::EchoReqCode,
+            0x09 => L2capSigData::EchoRspCode,
+            0x0a => L2capSigData::InformationReqCode(SignalInfoReq::new(data, args, id)),
+            0x0b => L2capSigData::InformationRspCode,
+            _ => L2capSigData::Undefined,
+        }
+    }
+
+    fn as_json(&self, start_byte: u8) -> String {
+        let start_byte = start_byte + 4;
+        match self {
+            L2capSigData::ConnectionReqCode(signal) => signal.as_json(start_byte),
+            L2capSigData::ConnectionRspCode(signal) => signal.as_json(start_byte),
+            L2capSigData::ConfigurationReqCode(signal) => signal.as_json(start_byte),
+            L2capSigData::ConfigurationRspCode(signal) => signal.as_json(start_byte),
+            L2capSigData::InformationReqCode(signal) => signal.as_json(start_byte),
+            _ => "".to_string(),
+        }
+    }
+}
+
+#[derive(Debug)]
+// code 0x02
+struct SignalConnReq {
+    psm: u16,
+    source_cid: u16,
+}
+
+impl SignalNode for SignalConnReq {
+    fn new(data: &[u8], args: &mut HostStack, id: u8) -> Self {
+        let sig = SignalConnReq {
+            psm: u16::from_le_bytes([data[0], data[1]]),
+            source_cid: u16::from_le_bytes([data[2], data[3]]),
+        };
+
+        let channels = &mut args.l2cap_arg.channels;
+        let mut is_contain = false;
+        for channel in channels.iter() {
+            if channel.source_cid == sig.source_cid {
+                is_contain = true;
+                break;
+            }
+        }
+        if !is_contain {
+            let mut channel = L2capChannel::default();
+            channel.identifier = id;
+            channel.psm = sig.psm;
+            channel.source_cid = sig.source_cid;
+            channels.push(channel);
+        }
+        sig
+    }
+    fn as_json(&self, start_byte: u8) -> String {
+        let psm_s = ParseBytesNode::new(start_byte, 2).format("PSM", self.psm, get_psm_name(self.psm).as_str(), "");
+        let source_cid_s =
+            ParseBytesNode::new(start_byte + 2, 2).format("Source CID", self.source_cid, "", "");
+        format!("{}, {}", psm_s, source_cid_s)
+    }
+}
+
+#[derive(Debug)]
 // code 0x03
-struct ConnectionRsp {
+struct SignalConnRsp {
     dest_cid: u16,
     source_cid: u16,
     result: u16,
     status: u16,
 }
 
-impl ParseNode for ConnectionRsp {
-    fn get_info(&self) -> ParseNodeInfo {
-        let dest_cid_s = "Destination CID";
-        let source_cid_s = "Source CID";
-        let result_s = "Result";
-        let status_s = "Status";
+impl SignalNode for SignalConnRsp {
+    fn new(data: &[u8], args: &mut HostStack, id: u8) -> Self {
+        let sig = SignalConnRsp {
+            dest_cid: u16::from_le_bytes([data[0], data[1]]),
+            source_cid: u16::from_le_bytes([data[2], data[3]]),
+            result: u16::from_le_bytes([data[4], data[5]]),
+            status: u16::from_le_bytes([data[6], data[7]]),
+        };
 
+        let channels = &mut args.l2cap_arg.channels;
+        for channel in channels.iter_mut() {
+            if channel.source_cid == sig.source_cid {
+                channel.dest_cid = sig.dest_cid;
+                channel.identifier = id;
+            }
+        }
+        sig
+    }
+
+    fn as_json(&self, start_byte: u8) -> String {
         let result_name_s = match self.result {
             0x0000 => "Connection Accepted",
             0x0001 => "Connection pending",
@@ -319,199 +289,116 @@ impl ParseNode for ConnectionRsp {
             _ => "",
         };
 
-        ParseNodeInfo::new(
-            "L2CAP_CONNECTION_RSP",
-            vec![
-                ParseNodeSubInfo::new(dest_cid_s, self.dest_cid, None, 2, ParseStatus::Ok),
-                ParseNodeSubInfo::new(source_cid_s, self.source_cid, None, 2, ParseStatus::Ok),
-                ParseNodeSubInfo::new(
-                    result_s,
-                    self.result,
-                    Some(result_name_s),
-                    2,
-                    check_parse_status(result_name_s),
-                ),
-                ParseNodeSubInfo::new(
-                    status_s,
-                    self.status,
-                    Some(status_name_s),
-                    2,
-                    check_parse_status(status_name_s),
-                ),
-            ],
+        let dest_cid_s =
+            ParseBytesNode::new(start_byte, 2).format("Destination CID", self.dest_cid, "", "");
+        let source_cid_s =
+            ParseBytesNode::new(start_byte + 2, 2).format("Source CID", self.source_cid, "", "");
+        let result_s =
+            ParseBytesNode::new(start_byte + 4, 2).format("Result", self.result, result_name_s, "");
+        let status_s =
+            ParseBytesNode::new(start_byte + 6, 2).format("Status", self.status, status_name_s, "");
+
+        format!(
+            "{}, {}, {}, {}",
+            dest_cid_s, source_cid_s, result_s, status_s
         )
     }
-    fn new(data: &[u8]) -> Self {
-        ConnectionRsp {
-            dest_cid: u16::from_le_bytes(data[0..2].try_into().unwrap()),
-            source_cid: u16::from_le_bytes(data[2..4].try_into().unwrap()),
-            result: u16::from_le_bytes(data[4..6].try_into().unwrap()),
-            status: u16::from_le_bytes(data[6..8].try_into().unwrap()),
-        }
-    }
 }
 
-// TODO: 添加剩余的 option
-enum ConfigParamOption {
-    MTU(u16),
-    FlushTimeout(u16),
-}
-
-impl ConfigParamOption {
-    fn new(option: &[u8]) -> Self {
-        let len;
-        let param = match option[0] {
-            0x01 => {
-                len = 2;
-                ConfigParamOption::MTU(u16::from_le_bytes(option[2..4].try_into().unwrap()))
-            }
-            0x02 => {
-                len = 2;
-                ConfigParamOption::FlushTimeout(u16::from_le_bytes(
-                    option[2..4].try_into().unwrap(),
-                ))
-            }
-            _ => panic!("Unknown config param option"),
-        };
-
-        if len != option[1] {
-            panic!("Config param option length mismatch");
-        }
-        param
-    }
-
-    fn get_option_len(&self) -> u8 {
-        match self {
-            ConfigParamOption::MTU(_) => 2,
-            ConfigParamOption::FlushTimeout(_) => 2,
-        }
-    }
-
-    fn get_subinfo(&self) -> Vec<ParseNodeSubInfo> {
-        let option_type_s = "Option Type";
-        let option_length_s = "Option Length";
-        match self {
-            ConfigParamOption::MTU(mtu) => {
-                vec![
-                    ParseNodeSubInfo::new(
-                        option_type_s,
-                        "MAXIMUM TRANSMISSION UNIT (MTU)",
-                        None,
-                        1,
-                        ParseStatus::Ok,
-                    ),
-                    ParseNodeSubInfo::new(
-                        option_length_s,
-                        self.get_option_len(),
-                        None,
-                        1,
-                        ParseStatus::Ok,
-                    ),
-                    ParseNodeSubInfo::new("MTU", mtu, None, 2, ParseStatus::Ok),
-                ]
-            }
-            ConfigParamOption::FlushTimeout(flush_timeout) => {
-                vec![
-                    ParseNodeSubInfo::new(option_type_s, "FLUSH TIMEOUT", None, 1, ParseStatus::Ok),
-                    ParseNodeSubInfo::new(
-                        option_length_s,
-                        self.get_option_len(),
-                        None,
-                        1,
-                        ParseStatus::Ok,
-                    ),
-                    ParseNodeSubInfo::new("FLUSH TIMEOUT", flush_timeout, None, 2, ParseStatus::Ok),
-                ]
-            }
-        }
-    }
-}
-
-impl Debug for ConfigParamOption {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ConfigParamOption::MTU(mtu) => write!(f, r#""MTU":"{:#x}""#, mtu),
-            ConfigParamOption::FlushTimeout(flush_timeout) => {
-                write!(f, r#""Flush Timeout":"{:#x}"#, flush_timeout)
-            }
-        }
-    }
-}
-
-#[allow(dead_code)]
+#[derive(Debug)]
 // code 0x04
-struct ConfigurationReq {
+struct SignalConfReq {
     dest_cid: u16,
     flags: u16,
-    configuration_option: Option<ConfigParamOption>,
+    option: Option<ConfigOption>,
 }
 
-impl ParseNode for ConfigurationReq {
-    fn get_info(&self) -> ParseNodeInfo {
-        let dest_cid_s = "Destination CID";
-        let flags_s = "Flags";
-        let configuration_option_s = "Configuration Option";
-
-        let mut ret = ParseNodeInfo::new(
-            "L2CAP_CONFIGURATION_REQ",
-            vec![
-                ParseNodeSubInfo::new(dest_cid_s, self.dest_cid, None, 2, ParseStatus::Ok),
-                // TODO: flag 检查与解析
-                ParseNodeSubInfo::new(flags_s, self.flags, None, 2, ParseStatus::Ok),
-            ],
-        );
-
-        // TODO:
-        if self.configuration_option.is_some() {
-            let option = self.configuration_option.as_ref().unwrap();
-            let start = ParseNodeSubInfo::new(
-                configuration_option_s,
-                "",
-                None,
-                0,
-                ParseStatus::SubtreeStart,
-            );
-            ret.sub_info.push(start);
-            for option in option.get_subinfo() {
-                ret.sub_info.push(option);
-            }
-            let end = ParseNodeSubInfo::new("", "", None, 0, ParseStatus::SubtreeEnd);
-            ret.sub_info.push(end);
-        }
-        ret
-    }
-    fn new(data: &[u8]) -> Self {
-        let option = if data.len() > 4 {
-            let option = ConfigParamOption::new(&data[4..]);
-            Some(option)
-        } else {
-            None
+impl SignalNode for SignalConfReq {
+    fn new(data: &[u8], args: &mut HostStack, id: u8) -> Self {
+        let sig = SignalConfReq {
+            dest_cid: u16::from_le_bytes([data[0], data[1]]),
+            flags: u16::from_le_bytes([data[2], data[3]]),
+            option: Some(ConfigOption::new(&data[4..])),
         };
-        ConfigurationReq {
-            dest_cid: u16::from_le_bytes(data[0..2].try_into().unwrap()),
-            flags: u16::from_le_bytes(data[2..4].try_into().unwrap()),
-            configuration_option: option,
+
+        let channels = &mut args.l2cap_arg.channels;
+        for channel in channels.iter_mut() {
+            if sig.dest_cid == channel.dest_cid {
+                let data = sig.option.as_ref();
+                if let Some(option) = data {
+                    if let ConfigOptionData::MTU(option) = &option.data {
+                        channel.identifier = id;
+                        channel.local_mtu = option.mtu;
+                    }
+                }
+            } else if sig.dest_cid == channel.source_cid {
+                let data = sig.option.as_ref();
+                if let Some(option) = data {
+                    if let ConfigOptionData::MTU(option) = &option.data {
+                        channel.identifier = id;
+                        channel.remote_mtu = option.mtu;
+                    }
+                }
+            }
         }
+        sig
+    }
+
+    fn as_json(&self, start_byte: u8) -> String {
+        let dest_cid_s =
+            ParseBytesNode::new(start_byte, 2).format("Destination CID", self.dest_cid, "", "");
+        let flags_s = ParseBytesNode::new(start_byte + 2, 2).format("Flags", self.flags, "", "");
+        let mut json = format!("{}, {}", dest_cid_s, flags_s);
+        if let Some(option) = &self.option {
+            json.push_str(", ");
+            json.push_str(option.as_json(start_byte + 4).as_str());
+        }
+
+        json
     }
 }
 
-#[allow(dead_code)]
+#[derive(Debug)]
 // code 0x05
-struct ConfigurationRsp {
+struct SignalConfRsp {
     source_cid: u16,
     flags: u16,
     result: u16,
-    configuration_option: Option<ConfigParamOption>,
+    option: Option<ConfigOption>,
 }
 
-impl ParseNode for ConfigurationRsp{
-    fn get_info(&self) -> ParseNodeInfo {
-        let source_cid_s = "Source CID";
-        let flags_s = "Flags";
-        let result_s = "Result";
-        let configuration_option_s = "Configuration Option";
+impl SignalNode for SignalConfRsp {
+    fn new(data: &[u8], args: &mut HostStack, id: u8) -> Self {
+        println!("conf rsp len: {}", data.len());
+        let option = if data.len() > 6 {
+            Some(ConfigOption::new(&data[6..]))
+        } else {
+            None
+        };
+        let sig = SignalConfRsp {
+            source_cid: u16::from_le_bytes([data[0], data[1]]),
+            flags: u16::from_le_bytes([data[2], data[3]]),
+            result: u16::from_le_bytes([data[4], data[5]]),
+            option,
+        };
 
-        let result_name = match self.result {
+        let channels = &mut args.l2cap_arg.channels;
+        for channel in channels.iter_mut() {
+            if sig.source_cid == channel.dest_cid {
+                let data = sig.option.as_ref();
+                if let Some(option) = data {
+                    if let ConfigOptionData::MTU(option) = &option.data {
+                        channel.identifier = id;
+                        channel.remote_mtu = option.mtu;
+                    }
+                }
+            }
+        }
+
+        sig
+    }
+    fn as_json(&self, start_byte: u8) -> String {
+        let result_name_s = match self.result {
             0x0000 => "Success",
             0x0001 => "Failure - unacceptable parameters",
             0x0002 => "Failure - rejected (no reason provided)",
@@ -520,219 +407,125 @@ impl ParseNode for ConfigurationRsp{
             0x0005 => "Failure - flow spec rejected",
             _ => "Reserved for future use",
         };
+        let dest_cid_s =
+            ParseBytesNode::new(start_byte, 2).format("Destination CID", self.source_cid, "", "");
+        let flags_s = ParseBytesNode::new(start_byte + 2, 2).format("Flags", self.flags, "", "");
+        let result_s =
+            ParseBytesNode::new(start_byte + 4, 2).format("Result", self.result, result_name_s, "");
 
-        let mut ret = ParseNodeInfo::new(
-            "L2CAP_CONFIGURATION_RSP",
-            vec![
-                ParseNodeSubInfo::new(source_cid_s, self.source_cid, None, 2, ParseStatus::Ok),
-                // TODO: flag 检查与解析
-                ParseNodeSubInfo::new(flags_s, self.flags, None, 2, ParseStatus::Ok),
-                ParseNodeSubInfo::new(result_s, self.result, Some(result_name), 2, ParseStatus::Ok),
-            ],
-        );
-        
-        // TODO:
-        if self.configuration_option.is_some() {
-            let option = self.configuration_option.as_ref().unwrap();
-            let start = ParseNodeSubInfo::new(
-                configuration_option_s,
-                "",
-                None,
-                0,
-                ParseStatus::SubtreeStart,
-            );
-            ret.sub_info.push(start);
-            for option in option.get_subinfo() {
-                ret.sub_info.push(option);
-            }
-            let end = ParseNodeSubInfo::new("", "", None, 0, ParseStatus::SubtreeEnd);
-            ret.sub_info.push(end);
+        let mut json = format!("{}, {}, {}", dest_cid_s, flags_s, result_s);
+        if let Some(option) = &self.option {
+            json.push_str(", ");
+            json.push_str(option.as_json(start_byte + 6).as_str());
         }
-        ret
-    }
-
-    fn new(data: &[u8]) -> Self {
-        let option = if data.len() > 6 {
-            let option = ConfigParamOption::new(&data[6..]);
-            Some(option)
-        } else {
-            None
-        };
-        ConfigurationRsp {
-            source_cid: u16::from_le_bytes(data[0..2].try_into().unwrap()),
-            flags: u16::from_le_bytes(data[2..4].try_into().unwrap()),
-            result: u16::from_le_bytes(data[4..6].try_into().unwrap()),
-            configuration_option: option,
-        }
+        json
     }
 }
 
-#[allow(dead_code)]
-// code 0x06
-struct DisconnectionReq {
-    dest_cid: u16,
-    source_cid: u16,
-}
-
-#[allow(dead_code)]
-// code 0x07
-struct DisconnectionRsp {
-    dest_cid: u16,
-    source_cid: u16,
-}
-
-#[allow(dead_code)]
-// code 0x08
-struct EchoReq {
-    echo_data: Vec<u8>,
-}
-
-#[allow(dead_code)]
-// code 0x09
-struct EchoRsp {
-    echo_data: Vec<u8>,
-}
-
-#[allow(dead_code)]
 #[derive(Debug)]
-// code 0x0A
-struct InformationReq {
+struct SignalInfoReq {
     info_type: u16,
 }
 
-impl ParseNode for InformationReq {
-    fn get_info(&self) -> ParseNodeInfo {
-        let info_type_s = "Info Type";
-        let info_type_name_s = match self.info_type {
-            1 => "Connectionless MTU",
-            2 => "Extended features supported",
-            3 => "Fixed channels supported",
-            _ => "",
-        };
+impl SignalNode for SignalInfoReq {
+    fn new(data: &[u8], _args: &mut HostStack, _id: u8) -> Self {
+        SignalInfoReq {
+            info_type: u16::from_le_bytes([data[0], data[1]]),
+        }
+    }
+    fn as_json(&self, start_byte: u8) -> String {
+        let info_type_s =
+            ParseBytesNode::new(start_byte, 2).format("Info Type", self.info_type, "", "");
+        format!("{}", info_type_s)
+    }
+}
 
-        ParseNodeInfo::new(
-            "L2CAP_INFORMATION_REQ",
-            vec![ParseNodeSubInfo::new(
-                info_type_s,
-                self.info_type,
-                Some(info_type_name_s),
-                2,
-                check_parse_status(info_type_name_s),
-            )],
+#[derive(Debug)]
+enum ConfigOptionData {
+    Undefined,
+    MTU(ConfigOptionMTU),
+    FlushTimeout,
+    QOS,
+    RetransmissionAndFlowControl,
+    FCS,
+    ExtendedFlowSpecification,
+    ExtendedWindowSize,
+}
+
+impl ConfigOptionData {
+    fn new(data: &[u8]) -> Self {
+        let opt_type = data[0];
+        let data = &data[2..];
+        match opt_type {
+            0x01 => ConfigOptionData::MTU(ConfigOptionMTU::new(data)),
+            0x02 => ConfigOptionData::FlushTimeout,
+            0x03 => ConfigOptionData::QOS,
+            0x04 => ConfigOptionData::RetransmissionAndFlowControl,
+            0x05 => ConfigOptionData::FCS,
+            0x06 => ConfigOptionData::ExtendedFlowSpecification,
+            0x07 => ConfigOptionData::ExtendedWindowSize,
+            _ => ConfigOptionData::Undefined,
+        }
+    }
+
+    fn as_json(&self, start_byte: u8) -> String {
+        match self {
+            ConfigOptionData::MTU(option) => option.as_json(start_byte),
+            _ => "".to_string(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ConfigOption {
+    opt_type: u8,
+    opt_len: u8,
+    data: ConfigOptionData,
+}
+
+impl ConfigOption {
+    fn new(data: &[u8]) -> Self {
+        let opt_type = data[0];
+        let opt_len = data[1];
+
+        let data = ConfigOptionData::new(data);
+        ConfigOption {
+            opt_type,
+            opt_len,
+            data,
+        }
+    }
+
+    fn as_json(&self, start_byte: u8) -> String {
+        let opt_type_s =
+            ParseBytesNode::new(start_byte, 1).format("Option Type", self.opt_type, "", "");
+        let opt_len_s =
+            ParseBytesNode::new(start_byte + 1, 1).format("Option Length", self.opt_len, "", "");
+        let data_s = self.data.as_json(start_byte + 2);
+
+        format!(
+            r#""Configuration Options": {{{}, {}, {}}}"#,
+            opt_type_s, opt_len_s, data_s
         )
     }
+}
+
+#[derive(Debug)]
+struct ConfigOptionMTU {
+    mtu: u16,
+}
+
+impl ConfigOptionMTU {
     fn new(data: &[u8]) -> Self {
-        InformationReq {
-            info_type: u16::from_le_bytes(data.try_into().unwrap()),
+        ConfigOptionMTU {
+            mtu: u16::from_le_bytes([data[0], data[1]]),
         }
     }
-}
 
-#[allow(dead_code)]
-// code 0x0B
-struct InformationRsp {
-    info_type: u16,
-    result: u16,
-    info: Vec<u8>,
-}
+    fn as_json(&self, start_byte: u8) -> String {
+        let mtu_s = ParseBytesNode::new(start_byte, 2).format("MTU", self.mtu, "", "");
 
-impl ParseNode for InformationRsp {
-    fn get_info(&self) -> ParseNodeInfo {
-        ParseNodeInfo::new(
-            "L2CAP_INFORMATION_RSP",
-            vec![ParseNodeSubInfo::new("", "", None, 0, ParseStatus::Error)],
-        )
-    }
-    fn new(data: &[u8]) -> Self {
-        InformationRsp {
-            info_type: u16::from_le_bytes(data[0..2].try_into().unwrap()),
-            result: u16::from_le_bytes(data[2..4].try_into().unwrap()),
-            info: Vec::from(&data[4..]),
-        }
-    }
-}
-
-pub fn parse(data: &[u8], args: &mut HostStack) -> Vec<Box<dyn ParseLayer>> {
-    println!("{:?}", data);
-    let header = L2capHeader::new(data);
-    let cid = CID::from_u16(header.channel_id);
-
-    use CID::*;
-    let ret = match cid {
-        L2capSignalingChannel => {
-            let cmd = SignalCommandCode::from_u8(data[4]);
-
-            use SignalCommandCode::*;
-            let ret: Box<dyn ParseLayer> = match cmd {
-                ConnectionReqCode => {
-                    let signal: SignalCommand<ConnectionReq> = SignalCommand::new(&data[4..]);
-                    let mut channel = L2capChannel::default();
-                    channel.source_cid = signal.data.source_cid;
-                    channel.psm = signal.data.psm;
-                    args.l2cap_arg.channels.push(channel);
-                    Box::new(signal)
-                }
-                ConnectionRspCode => {
-                    let signal: SignalCommand<ConnectionRsp> = SignalCommand::new(&data[4..]);
-                    for channel in &mut args.l2cap_arg.channels {
-                        if channel.source_cid == signal.data.source_cid {
-                            channel.dest_cid = signal.data.dest_cid;
-                        }
-                    }
-                    Box::new(signal)
-                }
-                ConfigurationReqCode => {
-                    let signal: SignalCommand<ConfigurationReq> = SignalCommand::new(&data[4..]);
-                    use ConfigParamOption::*;
-                    for channel in &mut args.l2cap_arg.channels {
-                        if channel.dest_cid == signal.data.dest_cid {
-                            match signal.data.configuration_option {
-                                Some(MTU(mtu)) => {
-                                    channel.local_mtu = mtu;
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    Box::new(signal)
-                }
-                ConfigurationRspCode => {
-                    let signal: SignalCommand<ConfigurationRsp> = SignalCommand::new(&data[4..]);
-                    use ConfigParamOption::*;
-                    for channel in &mut args.l2cap_arg.channels {
-                        if channel.dest_cid == signal.data.source_cid {
-                            match signal.data.configuration_option {
-                                Some(MTU(mtu)) => {
-                                    channel.remote_mtu = mtu;
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    Box::new(signal)
-                }
-                InformationReqCode => {
-                    let signal: SignalCommand<InformationReq> = SignalCommand::new(&data[4..]);
-                    Box::new(signal)
-                }
-                _ => {
-                    let signal: SignalCommand<SignalUndefined> = SignalCommand::new(&data[4..]);
-                    Box::new(signal)
-                }
-            };
-            ret
-        }
-        _ => Box::new(L2capDummy {}),
-    };
-
-    vec![Box::new(header), ret]
-}
-
-fn check_parse_status(str: &str) -> ParseStatus {
-    if str.len() > 0 {
-        ParseStatus::Ok
-    } else {
-        ParseStatus::Error
+        format!("{}", mtu_s)
     }
 }
 
