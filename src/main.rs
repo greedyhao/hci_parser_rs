@@ -45,5 +45,7 @@ fn main() {
     let res = hci::parse(&acl, &mut args);
     println!("res:{}\nargs:{:?}\n", res, args);
 
-    // let acl = str_to_array("02 80 00 16 00 12 00 69 00 06 00 01 00 0d 35 03 19 11 0a 00 c0 35 03 09 00 04 00");
+    let acl = str_to_array("02 80 00 16 00 12 00 69 00 06 00 01 00 0d 35 03 19 11 0a 00 c0 35 03 09 00 04 00");
+    let res = hci::parse(&acl, &mut args);
+    println!("res:{}\nargs:{:?}\n", res, args);
 }

@@ -33,7 +33,7 @@ impl Debug for L2CAPChannel {
             self.source_cid,
             self.dest_cid,
             self.psm,
-            PSM::new(self.psm).get_name(),
+            PSM::fake_new(self.psm).get_name(),
             self.local_mtu,
             self.remote_mtu,
             self.flush_timeout,
@@ -93,7 +93,7 @@ enum Channel {
     L2CAPSignalingChannel(L2CAPSignaling),
     ConnetionlessChannel,
     BrEdrSecurityManager, // 7
-    DynamicallyAllocated, // 0x40
+    DynamicallyAllocated(PSM), // 0x40-0x7f
 }
 
 impl Channel {
@@ -104,7 +104,13 @@ impl Channel {
             7 => Channel::BrEdrSecurityManager,
             _ => {
                 if cid >= 0x40 && cid <= 0x7f {
-                    Channel::DynamicallyAllocated
+                    let channels = &mut args.l2cap_arg.channels;
+                    for channel in channels.iter() {
+                        if channel.dest_cid == cid {
+                            return Channel::DynamicallyAllocated(PSM::new(data, channel.psm));
+                        }
+                    }
+                    Channel::DynamicallyAllocated(PSM::new(data, 0))
                 } else {
                     Channel::Undefined
                 }
@@ -211,14 +217,14 @@ impl SignalNode for L2CAPSigData {
 #[derive(Debug, PartialEq)]
 // code 0x02
 struct SignalConnReq {
-    psm: PSM,
+    psm: u16,
     source_cid: u16,
 }
 
 impl SignalNode for SignalConnReq {
     fn new(data: &[u8], args: &mut HostStack, id: u8) -> Self {
         let sig = SignalConnReq {
-            psm: PSM::new(u16::from_le_bytes([data[0], data[1]])),
+            psm: u16::from_le_bytes([data[0], data[1]]),
             source_cid: u16::from_le_bytes([data[2], data[3]]),
         };
 
@@ -233,7 +239,7 @@ impl SignalNode for SignalConnReq {
         if !is_contain {
             let mut channel = L2CAPChannel::default();
             channel.identifier = id;
-            channel.psm = sig.psm.get_value();
+            channel.psm = sig.psm;
             channel.source_cid = sig.source_cid;
             channels.push(channel);
         }
@@ -242,8 +248,8 @@ impl SignalNode for SignalConnReq {
     fn as_json(&self, start_byte: u8) -> String {
         let psm_s = ParseBytesNode::new(start_byte, 2).format(
             "PSM",
-            self.psm.get_value(),
-            &self.psm.get_name(),
+            self.psm,
+            &PSM::fake_new(self.psm).get_name(),
             "",
         );
         let source_cid_s =
@@ -567,7 +573,7 @@ impl Default for PSM {
 }
 
 impl PSM {
-    fn new(psm: u16) -> Self {
+    fn new(_data: &[u8], psm: u16) -> Self {
         match psm {
             0x0001 => PSM::SDP,
             0x0003 => PSM::RFCOMM,
@@ -589,6 +595,12 @@ impl PSM {
             _ => PSM::Undefined,
         }
     }
+
+    fn fake_new(psm: u16) -> Self {
+        let data = vec![0; 255];
+        PSM::new(&data, psm)
+    }
+
     fn get_name(&self) -> String {
         let name = match self {
             PSM::SDP => "SDP",
@@ -612,6 +624,8 @@ impl PSM {
         };
         name.to_string()
     }
+
+    #[allow(unused)]
     fn get_value(&self) -> u16 {
         match self {
             PSM::SDP => 0x0001,
