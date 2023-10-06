@@ -6,7 +6,7 @@ use crate::ParseNodeWithArgs;
 use crate::ParseBitsNode;
 use crate::ParseBytesNode;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum HciPacket {
     Undefined,
     Cmd(HciCmd),
@@ -46,7 +46,7 @@ trait HciCmdOgfNode {
     fn as_json(&self, start_byte: u8) -> String;
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct HciCmd {
     opcode: u16,
     param_len: u8,
@@ -104,7 +104,7 @@ impl ParseNode for HciCmd {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum HciCmdParam {
     Undefined,
     LinkControl(OgfLinkControl),
@@ -168,7 +168,7 @@ impl HciCmdOgfNode for HciCmdParam {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum OgfLinkControl {
     Undefined,
     Inquiry(OcfInquiry),
@@ -198,7 +198,7 @@ impl HciCmdOgfNode for OgfLinkControl {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct OcfInquiry {
     lap: u32,
     inquiry_len: u8,
@@ -234,7 +234,7 @@ impl ParseNode for OcfInquiry {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum OgfControllerAndBaseband {
     Undefined,
     Reset(OcfReset),
@@ -265,7 +265,7 @@ impl HciCmdOgfNode for OgfControllerAndBaseband {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct OcfReset {}
 
 impl ParseNode for OcfReset {
@@ -277,7 +277,7 @@ impl ParseNode for OcfReset {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct HciAcl {
     handle: u16,
     pb_flag: u8,
@@ -319,7 +319,7 @@ impl ParseNodeWithArgs for HciAcl {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct HciEvt {
     code: u8,
     len: u8,
@@ -354,7 +354,7 @@ impl ParseNode for HciEvt {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum HciEvtParam {
     Undefined,
     CommandComplete(EvtCommandComplete),
@@ -375,7 +375,7 @@ impl HciEvtParam {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct EvtCommandComplete {
     num_hci_command_packets: u8,
     command_opcode: u16,
@@ -434,16 +434,37 @@ fn opcode_to_ocf(opcode: u16) -> u8 {
     (opcode >> 10) as u8
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use crate::str_to_array;
+#[cfg(test)]
+mod tests {
+    use crate::str_to_array;
 
-//     use super::*;
-//     #[test]
-//     fn hci_cmd_reset_test() {
-//         let cmd = str_to_array("03 0c 00");
-//         let res = HciPacket::new(1, &cmd, &mut args);
-//         let expect = HciPacket::Cmd(HciCmd::ControllerAndBaseband(OgfControllerAndBaseband::Reset(OcfReset{header:HciCmdHeader { opcode: (), param_len: () }})))
-//         // assert!(res, )
-//     }
-// }
+    use super::*;
+    #[test]
+    fn hci_cmd_reset_test() {
+        let mut args = HostStack::new();
+        let cmd = str_to_array("01 03 0c 00");
+        let res = HciPacket::new(&cmd, &mut args);
+        let expect = HciPacket::Cmd(HciCmd {
+            opcode: 0x0c03,
+            param_len: 0,
+            param: HciCmdParam::ControllerAndBaseband(OgfControllerAndBaseband::Reset(OcfReset {})),
+        });
+        assert_eq!(res, expect);
+    }
+
+    #[test]
+    fn hci_evt_0x0e_test() {
+        let mut args = HostStack::new();
+        let evt = str_to_array("04 0e 04 05 03 0c 00");
+        let res = HciPacket::new(&evt, &mut args);
+        let expect = HciPacket::Evt(HciEvt {
+            code: 0x0e,
+            len: 4,
+            param: HciEvtParam::CommandComplete(EvtCommandComplete {
+                num_hci_command_packets: 5,
+                command_opcode: 0x0c03,
+            }),
+        });
+        assert_eq!(res, expect);
+    }
+}

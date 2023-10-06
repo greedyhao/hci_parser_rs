@@ -41,7 +41,7 @@ impl Debug for L2capChannel {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum L2cap {
     L2capB(L2capB),
 }
@@ -58,7 +58,7 @@ impl ParseNodeWithArgs for L2cap {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct L2capB {
     pdu_len: u16,
     cid: u16,
@@ -87,7 +87,7 @@ impl ParseNodeWithArgs for L2capB {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum Channel {
     Undefined,
     L2capSignalingChannel(L2capSignaling),
@@ -119,7 +119,7 @@ trait SignalNode {
     fn as_json(&self, start_byte: u8) -> String;
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct L2capSignaling {
     code: u8,
     identifier: u8,
@@ -154,7 +154,7 @@ impl ParseNodeWithArgs for L2capSignaling {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum L2capSigData {
     Undefined,
     CommandRejectRspCode,
@@ -203,7 +203,7 @@ impl SignalNode for L2capSigData {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 // code 0x02
 struct SignalConnReq {
     psm: u16,
@@ -242,7 +242,7 @@ impl SignalNode for SignalConnReq {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 // code 0x03
 struct SignalConnRsp {
     dest_cid: u16,
@@ -305,7 +305,7 @@ impl SignalNode for SignalConnRsp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 // code 0x04
 struct SignalConfReq {
     dest_cid: u16,
@@ -358,7 +358,7 @@ impl SignalNode for SignalConfReq {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 // code 0x05
 struct SignalConfRsp {
     source_cid: u16,
@@ -422,7 +422,7 @@ impl SignalNode for SignalConfRsp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct SignalInfoReq {
     info_type: u16,
 }
@@ -440,7 +440,7 @@ impl SignalNode for SignalInfoReq {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum ConfigOptionData {
     Undefined,
     MTU(ConfigOptionMTU),
@@ -476,7 +476,7 @@ impl ConfigOptionData {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct ConfigOption {
     opt_type: u8,
     opt_len: u8,
@@ -510,7 +510,7 @@ impl ConfigOption {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct ConfigOptionMTU {
     mtu: u16,
 }
