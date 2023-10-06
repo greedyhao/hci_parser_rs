@@ -15,7 +15,7 @@
 hci 层的解析
 
 - [x] 添加一个 hci cmd 的解析
-- [ ] 添加一个 hci evt 的解析
+- [x] 添加一个 hci evt 的解析
 - [x] 添加一个 hci acl 的解析
 
 l2cap 层的解析

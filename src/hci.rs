@@ -1,7 +1,7 @@
 use crate::l2cap::L2cap;
 use crate::HostStack;
-use crate::ParseNodeWithArgs;
 use crate::ParseNode;
+use crate::ParseNodeWithArgs;
 
 use crate::ParseBitsNode;
 use crate::ParseBytesNode;
@@ -11,6 +11,9 @@ pub enum HciPacket {
     Undefined,
     Cmd(HciCmd),
     Acl(HciAcl),
+    Sco,
+    Evt(HciEvt),
+    Iso,
 }
 
 impl ParseNodeWithArgs for HciPacket {
@@ -20,18 +23,27 @@ impl ParseNodeWithArgs for HciPacket {
         match packet_type {
             1 => HciPacket::Cmd(HciCmd::new(data)),
             2 => HciPacket::Acl(HciAcl::new(data, args)),
+            3 => HciPacket::Sco,
+            4 => HciPacket::Evt(HciEvt::new(data)),
+            5 => HciPacket::Iso,
             _ => HciPacket::Undefined,
         }
     }
-    
+
     fn as_json(&self, start_byte: u8) -> String {
         let start_byte = start_byte + 1;
         match self {
-            HciPacket::Cmd(cmd) => cmd.as_json(start_byte),
-            HciPacket::Acl(acl) => acl.as_json(start_byte),
+            HciPacket::Cmd(pkg) => pkg.as_json(start_byte),
+            HciPacket::Acl(pkg) => pkg.as_json(start_byte),
+            HciPacket::Evt(pkg) => pkg.as_json(start_byte),
             _ => "".to_string(),
         }
     }
+}
+
+trait HciCmdOgfNode {
+    fn new(data: &[u8], opcode: u16) -> Self;
+    fn as_json(&self, start_byte: u8) -> String;
 }
 
 #[derive(Debug)]
@@ -41,11 +53,26 @@ pub struct HciCmd {
     param: HciCmdParam,
 }
 
+impl HciCmd {
+    fn fake_new(opcode: u16) -> Self {
+        let mut data = vec![0; 255];
+        data[0] = (opcode & 0xff) as u8;
+        data[1] = ((opcode >> 8) & 0xff) as u8;
+        let param_len = data[2];
+        let param = HciCmdParam::new(&data, opcode);
+        HciCmd {
+            opcode,
+            param_len,
+            param,
+        }
+    }
+}
+
 impl ParseNode for HciCmd {
     fn new(data: &[u8]) -> Self {
         let opcode = u16::from_le_bytes([data[0], data[1]]);
         let param_len = data[2];
-        let param = HciCmdParam::new(data);
+        let param = HciCmdParam::new(data, opcode);
         HciCmd {
             opcode,
             param_len,
@@ -53,16 +80,16 @@ impl ParseNode for HciCmd {
         }
     }
     fn as_json(&self, start_byte: u8) -> String {
-        let ocf = self.opcode & 0x3ff;
-        let ogf = self.opcode >> 10;
-        let ocf_s = ParseBitsNode::new(start_byte, 1, 0, 10).format(
-            "OCF",
+        let ocf = opcode_to_ogf(self.opcode);
+        let ogf = opcode_to_ocf(self.opcode);
+        let ocf_s = ParseBitsNode::new(start_byte, 2, 0, 10).format(
+            "Opcode Command Field (OCF)",
             ocf,
             self.param.get_ocf_name(),
             "",
         );
         let ogf_s = ParseBitsNode::new(start_byte + 1, 1, 10, 6).format(
-            "OGF",
+            "Opcode Group Field (OGF)",
             ogf,
             self.param.get_ogf_name(),
             "",
@@ -112,13 +139,13 @@ impl HciCmdParam {
     }
 }
 
-impl ParseNode for HciCmdParam {
-    fn new(data: &[u8]) -> Self {
-        let ogf = data[1] >> 2;
+impl HciCmdOgfNode for HciCmdParam {
+    fn new(data: &[u8], opcode: u16) -> Self {
+        let ogf = opcode_to_ogf(opcode);
         match ogf {
-            1 => HciCmdParam::LinkControl(OgfLinkControl::new(data)),
+            1 => HciCmdParam::LinkControl(OgfLinkControl::new(data, opcode)),
             2 => HciCmdParam::LinkPolicy,
-            3 => HciCmdParam::ControllerAndBaseband(OgfControllerAndBaseband::new(data)),
+            3 => HciCmdParam::ControllerAndBaseband(OgfControllerAndBaseband::new(data, opcode)),
             4 => HciCmdParam::InformationalParameters,
             5 => HciCmdParam::StatusParameters,
             6 => HciCmdParam::Testing,
@@ -155,11 +182,9 @@ impl OgfLinkControl {
         }
     }
 }
-
-impl ParseNode for OgfLinkControl {
-    fn new(data: &[u8]) -> Self {
-        let opcode = u16::from_le_bytes(data[0..2].try_into().unwrap());
-        let ocf = opcode & 0x3ff;
+impl HciCmdOgfNode for OgfLinkControl {
+    fn new(data: &[u8], opcode: u16) -> Self {
+        let ocf = opcode_to_ogf(opcode);
         match ocf {
             1 => OgfLinkControl::Inquiry(OcfInquiry::new(data)),
             _ => OgfLinkControl::Undefined,
@@ -219,15 +244,14 @@ impl OgfControllerAndBaseband {
     fn get_ocf_name(&self) -> &'static str {
         match self {
             OgfControllerAndBaseband::Reset(_) => "Reset",
-            _ => ""
+            _ => "",
         }
     }
 }
 
-impl ParseNode for OgfControllerAndBaseband {
-    fn new(data: &[u8]) -> Self {
-        let opcode = u16::from_le_bytes(data[0..2].try_into().unwrap());
-        let ocf = opcode & 0x3ff;
+impl HciCmdOgfNode for OgfControllerAndBaseband {
+    fn new(data: &[u8], opcode: u16) -> Self {
+        let ocf = opcode_to_ogf(opcode);
         match ocf {
             3 => OgfControllerAndBaseband::Reset(OcfReset::new(data)),
             _ => OgfControllerAndBaseband::Undefined,
@@ -281,12 +305,116 @@ impl ParseNodeWithArgs for HciAcl {
             ParseBitsNode::new(start_byte + 1, 1, 12, 2).format("PB Flag", self.pb_flag, "", "");
         let bc_flag_s =
             ParseBitsNode::new(start_byte + 1, 1, 14, 2).format("BC Flag", self.bc_flag, "", "");
-        let data_len_s =
-            ParseBytesNode::new(start_byte + 2, 2).format("Data Totlal Length", self.data_len, "", "");
+        let data_len_s = ParseBytesNode::new(start_byte + 2, 2).format(
+            "Data Totlal Length",
+            self.data_len,
+            "",
+            "",
+        );
         let data_s = self.data.as_json(start_byte + 4);
         format!(
             r#""ACL": {{{}, {}, {}, {}, {}}}"#,
             handle_s, pb_flag_s, bc_flag_s, data_len_s, data_s
+        )
+    }
+}
+
+#[derive(Debug)]
+pub struct HciEvt {
+    code: u8,
+    len: u8,
+    param: HciEvtParam,
+}
+
+impl ParseNode for HciEvt {
+    fn new(data: &[u8]) -> Self {
+        let code = data[0];
+        HciEvt {
+            code,
+            len: data[1],
+            param: HciEvtParam::new(&data[2..], code),
+        }
+    }
+    fn as_json(&self, start_byte: u8) -> String {
+        let code_name_s = match self.code {
+            0x0e => "HCI_Command_Complete",
+            _ => "Unknown",
+        };
+
+        let code_s =
+            ParseBytesNode::new(start_byte, 1).format("Event Code", self.code, code_name_s, "");
+        let len_s = ParseBytesNode::new(start_byte + 1, 1).format(
+            "Parameter Total Length",
+            self.len,
+            "",
+            "",
+        );
+        let param_s = self.param.as_json(start_byte + 2);
+        format!(r#""EVT": {{{}, {}, {}}}"#, code_s, len_s, param_s)
+    }
+}
+
+#[derive(Debug)]
+enum HciEvtParam {
+    Undefined,
+    CommandComplete(EvtCommandComplete),
+}
+
+impl HciEvtParam {
+    fn new(data: &[u8], code: u8) -> Self {
+        match code {
+            0x0e => HciEvtParam::CommandComplete(EvtCommandComplete::new(data)),
+            _ => HciEvtParam::Undefined,
+        }
+    }
+    fn as_json(&self, start_byte: u8) -> String {
+        match self {
+            HciEvtParam::CommandComplete(evt) => evt.as_json(start_byte),
+            _ => "".to_string(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct EvtCommandComplete {
+    num_hci_command_packets: u8,
+    command_opcode: u16,
+    // return Depends on command
+}
+
+impl ParseNode for EvtCommandComplete {
+    fn new(data: &[u8]) -> Self {
+        EvtCommandComplete {
+            num_hci_command_packets: data[0],
+            command_opcode: u16::from_le_bytes([data[1], data[2]]),
+        }
+    }
+
+    fn as_json(&self, start_byte: u8) -> String {
+        let fake = HciCmd::fake_new(self.command_opcode);
+        let num_hci_command_packets_s = ParseBytesNode::new(start_byte, 1).format(
+            "Num_HCI_Command_Packets",
+            self.num_hci_command_packets,
+            "",
+            "",
+        );
+        let opcode_s =
+            ParseBytesNode::new(start_byte + 1, 2).format("Opcode", self.command_opcode, "", "");
+        let opcode_ogf_s = ParseBytesNode::new(start_byte + 2, 1).format(
+            "Opcode Group Field (OGF)",
+            opcode_to_ogf(self.command_opcode),
+            fake.param.get_ogf_name(),
+            "",
+        );
+        let opcode_ocf_s = ParseBytesNode::new(start_byte + 1, 2).format(
+            "Opcode Command Field (OCF)",
+            opcode_to_ocf(self.command_opcode),
+            fake.param.get_ocf_name(),
+            "",
+        );
+        format!(
+            "{}, Command_Opcode: {{{}, {}, {}}}",
+            num_hci_command_packets_s, opcode_s, opcode_ogf_s, opcode_ocf_s
         )
     }
 }
@@ -296,6 +424,14 @@ pub fn parse(data: &[u8], args: &mut HostStack) -> String {
     println!("ret={:?}\n", ret);
 
     ret.as_json(0)
+}
+
+fn opcode_to_ogf(opcode: u16) -> u8 {
+    (opcode & 0x3ff) as u8
+}
+
+fn opcode_to_ocf(opcode: u16) -> u8 {
+    (opcode >> 10) as u8
 }
 
 // #[cfg(test)]

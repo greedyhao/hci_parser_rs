@@ -6,14 +6,19 @@ use hci_parser_rs::str_to_array;
 
 fn main() {
     let mut args = HostStack::new();
-    // let cmd = str_to_array("03 0c 00");
+
+    // reset
+    let cmd = str_to_array("01 03 0c 00");
+    let res = hci::parse(&cmd, &mut args);
+    println!("res:{}\nargs:{:?}\n", res, args);
+    let evt = str_to_array("04 0e 04 05 03 0c 00");
+    let res = hci::parse(&evt, &mut args);
+    println!("res:{}\nargs:{:?}\n", res, args);
+
+    // inquiry
     let cmd = str_to_array("01 01 04 05 01 02 03 04 ff");
     let res = hci::parse(&cmd, &mut args);
-    println!("{}\n", res);
-    // for arg in res.args {
-    //     arg.update_stack(&mut args);
-    // }
-    // println!("{:?}\n", args);
+    println!("res:{}\nargs:{:?}\n", res, args);
 
     // sdp
     let acl = str_to_array("02 80 00 0c 00 08 00 01 00 02 02 04 00 01 00 40 00");
