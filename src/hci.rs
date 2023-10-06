@@ -1,4 +1,4 @@
-use crate::l2cap::L2cap;
+use crate::l2cap::L2CAP;
 use crate::HostStack;
 use crate::ParseNode;
 use crate::ParseNodeWithArgs;
@@ -283,7 +283,7 @@ pub struct HciAcl {
     pb_flag: u8,
     bc_flag: u8,
     data_len: u16,
-    data: L2cap,
+    data: L2CAP,
 }
 
 impl ParseNodeWithArgs for HciAcl {
@@ -294,7 +294,7 @@ impl ParseNodeWithArgs for HciAcl {
             pb_flag: ((handle >> 12) & 0x3) as u8,
             bc_flag: (handle >> 14) as u8,
             data_len: u16::from_le_bytes(data[2..4].try_into().unwrap()),
-            data: L2cap::new(&data[4..], args),
+            data: L2CAP::new(&data[4..], args),
         }
     }
 

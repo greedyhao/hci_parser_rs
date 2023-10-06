@@ -4,21 +4,21 @@ pub use hci::HciPacket;
 mod l2cap;
 mod sdp;
 
-use l2cap::L2capArg;
-use sdp::SdpArg;
+use l2cap::L2CAPArg;
+use sdp::SDPArg;
 
 #[allow(unused)]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct HostStack {
-    l2cap_arg: L2capArg,
-    sdp_arg: SdpArg,
+    l2cap_arg: L2CAPArg,
+    sdp_arg: SDPArg,
 }
 
 impl HostStack {
     pub fn new() -> Self {
         HostStack {
-            l2cap_arg: L2capArg::default(),
-            sdp_arg: SdpArg::default(),
+            l2cap_arg: L2CAPArg::default(),
+            sdp_arg: SDPArg::default(),
         }
     }
 }

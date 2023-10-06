@@ -6,13 +6,13 @@ use crate::ParseNodeWithArgs;
 // use crate::ParseBitsNode;
 use crate::ParseBytesNode;
 
-#[derive(Default, Debug, Clone)]
-pub struct L2capArg {
-    channels: Vec<L2capChannel>,
+#[derive(Default, Debug)]
+pub struct L2CAPArg {
+    channels: Vec<L2CAPChannel>,
 }
 
-#[derive(Default, Clone, Copy)]
-struct L2capChannel {
+#[derive(Default)]
+struct L2CAPChannel {
     identifier: u8,
     source_cid: u16,
     dest_cid: u16,
@@ -24,16 +24,16 @@ struct L2capChannel {
     flush_timeout: u16,
 }
 
-impl Debug for L2capChannel {
+impl Debug for L2CAPChannel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "L2capChannel {{ identifier:{:#x}, source_cid: {:#x}, dest_cid: {:#x}, psm: {:#x}({}), local_mtu:{:#x}, remote_mtu:{:#x}, flush_timeout:{:#x}}}",
+            "L2CAPChannel {{ identifier:{:#x}, source_cid: {:#x}, dest_cid: {:#x}, psm: {:#x}({}), local_mtu:{:#x}, remote_mtu:{:#x}, flush_timeout:{:#x}}}",
             self.identifier,
             self.source_cid,
             self.dest_cid,
             self.psm,
-            get_psm_name(self.psm),
+            PSM::new(self.psm).get_name(),
             self.local_mtu,
             self.remote_mtu,
             self.flush_timeout,
@@ -42,35 +42,35 @@ impl Debug for L2capChannel {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum L2cap {
-    L2capB(L2capB),
+pub enum L2CAP {
+    L2CAPB(L2CAPB),
 }
 
-impl ParseNodeWithArgs for L2cap {
+impl ParseNodeWithArgs for L2CAP {
     fn new(data: &[u8], args: &mut HostStack) -> Self {
-        L2cap::L2capB(L2capB::new(data, args))
+        L2CAP::L2CAPB(L2CAPB::new(data, args))
     }
 
     fn as_json(&self, start_byte: u8) -> String {
         match self {
-            L2cap::L2capB(l2cap) => l2cap.as_json(start_byte),
+            L2CAP::L2CAPB(l2cap) => l2cap.as_json(start_byte),
         }
     }
 }
 
 #[derive(Debug, PartialEq)]
-pub struct L2capB {
+pub struct L2CAPB {
     pdu_len: u16,
     cid: u16,
     payload: Channel,
 }
 
-impl ParseNodeWithArgs for L2capB {
+impl ParseNodeWithArgs for L2CAPB {
     fn new(data: &[u8], args: &mut HostStack) -> Self {
         let pdu_len = u16::from_le_bytes([data[0], data[1]]);
         let cid = u16::from_le_bytes([data[2], data[3]]);
         let payload = Channel::new(&data[4..], args, cid);
-        L2capB {
+        L2CAPB {
             pdu_len,
             cid,
             payload,
@@ -90,7 +90,7 @@ impl ParseNodeWithArgs for L2capB {
 #[derive(Debug, PartialEq)]
 enum Channel {
     Undefined,
-    L2capSignalingChannel(L2capSignaling),
+    L2CAPSignalingChannel(L2CAPSignaling),
     ConnetionlessChannel,
     BrEdrSecurityManager, // 7
     DynamicallyAllocated, // 0x40
@@ -99,16 +99,21 @@ enum Channel {
 impl Channel {
     fn new(data: &[u8], args: &mut HostStack, cid: u16) -> Self {
         match cid {
-            1 => Channel::L2capSignalingChannel(L2capSignaling::new(data, args)),
+            1 => Channel::L2CAPSignalingChannel(L2CAPSignaling::new(data, args)),
             2 => Channel::ConnetionlessChannel,
             7 => Channel::BrEdrSecurityManager,
-            0x40 => Channel::DynamicallyAllocated,
-            _ => Channel::Undefined,
+            _ => {
+                if cid >= 0x40 && cid <= 0x7f {
+                    Channel::DynamicallyAllocated
+                } else {
+                    Channel::Undefined
+                }
+            }
         }
     }
     fn as_json(&self, start_byte: u8) -> String {
         match self {
-            Channel::L2capSignalingChannel(l2cap_signaling) => l2cap_signaling.as_json(start_byte),
+            Channel::L2CAPSignalingChannel(l2cap_signaling) => l2cap_signaling.as_json(start_byte),
             _ => "".to_string(),
         }
     }
@@ -120,20 +125,20 @@ trait SignalNode {
 }
 
 #[derive(Debug, PartialEq)]
-struct L2capSignaling {
+struct L2CAPSignaling {
     code: u8,
     identifier: u8,
     data_length: u16,
-    data: L2capSigData,
+    data: L2CAPSigData,
 }
 
-impl ParseNodeWithArgs for L2capSignaling {
+impl ParseNodeWithArgs for L2CAPSignaling {
     fn new(data: &[u8], args: &mut HostStack) -> Self {
         let code = data[0];
         let identifier = data[1];
         let data_length = u16::from_le_bytes([data[2], data[3]]);
-        let data = L2capSigData::new(data, args, identifier);
-        L2capSignaling {
+        let data = L2CAPSigData::new(data, args, identifier);
+        L2CAPSignaling {
             code,
             identifier,
             data_length,
@@ -155,7 +160,7 @@ impl ParseNodeWithArgs for L2capSignaling {
 }
 
 #[derive(Debug, PartialEq)]
-enum L2capSigData {
+enum L2CAPSigData {
     Undefined,
     CommandRejectRspCode,
     ConnectionReqCode(SignalConnReq),
@@ -170,34 +175,34 @@ enum L2capSigData {
     InformationRspCode,
 }
 
-impl SignalNode for L2capSigData {
+impl SignalNode for L2CAPSigData {
     fn new(data: &[u8], args: &mut HostStack, id: u8) -> Self {
         let code = data[0];
         let data = &data[4..];
         match code {
-            0x01 => L2capSigData::CommandRejectRspCode,
-            0x02 => L2capSigData::ConnectionReqCode(SignalConnReq::new(data, args, id)),
-            0x03 => L2capSigData::ConnectionRspCode(SignalConnRsp::new(data, args, id)),
-            0x04 => L2capSigData::ConfigurationReqCode(SignalConfReq::new(data, args, id)),
-            0x05 => L2capSigData::ConfigurationRspCode(SignalConfRsp::new(data, args, id)),
-            0x06 => L2capSigData::DisconnectionReqCode,
-            0x07 => L2capSigData::DisconnectionRspCode,
-            0x08 => L2capSigData::EchoReqCode,
-            0x09 => L2capSigData::EchoRspCode,
-            0x0a => L2capSigData::InformationReqCode(SignalInfoReq::new(data, args, id)),
-            0x0b => L2capSigData::InformationRspCode,
-            _ => L2capSigData::Undefined,
+            0x01 => L2CAPSigData::CommandRejectRspCode,
+            0x02 => L2CAPSigData::ConnectionReqCode(SignalConnReq::new(data, args, id)),
+            0x03 => L2CAPSigData::ConnectionRspCode(SignalConnRsp::new(data, args, id)),
+            0x04 => L2CAPSigData::ConfigurationReqCode(SignalConfReq::new(data, args, id)),
+            0x05 => L2CAPSigData::ConfigurationRspCode(SignalConfRsp::new(data, args, id)),
+            0x06 => L2CAPSigData::DisconnectionReqCode,
+            0x07 => L2CAPSigData::DisconnectionRspCode,
+            0x08 => L2CAPSigData::EchoReqCode,
+            0x09 => L2CAPSigData::EchoRspCode,
+            0x0a => L2CAPSigData::InformationReqCode(SignalInfoReq::new(data, args, id)),
+            0x0b => L2CAPSigData::InformationRspCode,
+            _ => L2CAPSigData::Undefined,
         }
     }
 
     fn as_json(&self, start_byte: u8) -> String {
         let start_byte = start_byte + 4;
         match self {
-            L2capSigData::ConnectionReqCode(signal) => signal.as_json(start_byte),
-            L2capSigData::ConnectionRspCode(signal) => signal.as_json(start_byte),
-            L2capSigData::ConfigurationReqCode(signal) => signal.as_json(start_byte),
-            L2capSigData::ConfigurationRspCode(signal) => signal.as_json(start_byte),
-            L2capSigData::InformationReqCode(signal) => signal.as_json(start_byte),
+            L2CAPSigData::ConnectionReqCode(signal) => signal.as_json(start_byte),
+            L2CAPSigData::ConnectionRspCode(signal) => signal.as_json(start_byte),
+            L2CAPSigData::ConfigurationReqCode(signal) => signal.as_json(start_byte),
+            L2CAPSigData::ConfigurationRspCode(signal) => signal.as_json(start_byte),
+            L2CAPSigData::InformationReqCode(signal) => signal.as_json(start_byte),
             _ => "".to_string(),
         }
     }
@@ -206,14 +211,14 @@ impl SignalNode for L2capSigData {
 #[derive(Debug, PartialEq)]
 // code 0x02
 struct SignalConnReq {
-    psm: u16,
+    psm: PSM,
     source_cid: u16,
 }
 
 impl SignalNode for SignalConnReq {
     fn new(data: &[u8], args: &mut HostStack, id: u8) -> Self {
         let sig = SignalConnReq {
-            psm: u16::from_le_bytes([data[0], data[1]]),
+            psm: PSM::new(u16::from_le_bytes([data[0], data[1]])),
             source_cid: u16::from_le_bytes([data[2], data[3]]),
         };
 
@@ -226,16 +231,21 @@ impl SignalNode for SignalConnReq {
             }
         }
         if !is_contain {
-            let mut channel = L2capChannel::default();
+            let mut channel = L2CAPChannel::default();
             channel.identifier = id;
-            channel.psm = sig.psm;
+            channel.psm = sig.psm.get_value();
             channel.source_cid = sig.source_cid;
             channels.push(channel);
         }
         sig
     }
     fn as_json(&self, start_byte: u8) -> String {
-        let psm_s = ParseBytesNode::new(start_byte, 2).format("PSM", self.psm, get_psm_name(self.psm).as_str(), "");
+        let psm_s = ParseBytesNode::new(start_byte, 2).format(
+            "PSM",
+            self.psm.get_value(),
+            &self.psm.get_name(),
+            "",
+        );
         let source_cid_s =
             ParseBytesNode::new(start_byte + 2, 2).format("Source CID", self.source_cid, "", "");
         format!("{}, {}", psm_s, source_cid_s)
@@ -369,7 +379,6 @@ struct SignalConfRsp {
 
 impl SignalNode for SignalConfRsp {
     fn new(data: &[u8], args: &mut HostStack, id: u8) -> Self {
-        println!("conf rsp len: {}", data.len());
         let option = if data.len() > 6 {
             Some(ConfigOption::new(&data[6..]))
         } else {
@@ -529,26 +538,100 @@ impl ConfigOptionMTU {
     }
 }
 
-fn get_psm_name(psm: u16) -> String {
-    let psm_name = match psm {
-        0x0001 => "SDP",
-        0x0003 => "RFCOMM",
-        0x0005 => "TCS-BIN",
-        0x0007 => "TCS-BIN-CORDLESS",
-        0x000F => "BNEP",
-        0x0011 => "HID_Control",
-        0x0013 => "HID_Interrupt",
-        0x0015 => "UPnP",
-        0x0017 => "AVCTP",
-        0x0019 => "AVDTP",
-        0x001B => "AVCTP_Browsing",
-        0x001D => "UDI_C-Plane",
-        0x001F => "ATT",
-        0x0021 => "3DSP",
-        0x0023 => "LE_PSM_IPSP",
-        0x0025 => "OTS",
-        0x0027 => "EATT",
-        _ => "",
-    };
-    psm_name.to_string()
+#[derive(Debug, PartialEq)]
+enum PSM {
+    Undefined,
+    SDP,
+    RFCOMM,
+    TCSBin,
+    TCSBinCordless,
+    BNEP,
+    HIDControl,
+    HIDInterrupt,
+    UPnP,
+    AVCTP,
+    AVDTP,
+    AVCTPBrowsing,
+    UDICPlane,
+    ATT,
+    ThreeDSP,
+    LEPsmIpsp,
+    OTS,
+    EATT,
+}
+
+impl Default for PSM {
+    fn default() -> Self {
+        PSM::Undefined
+    }
+}
+
+impl PSM {
+    fn new(psm: u16) -> Self {
+        match psm {
+            0x0001 => PSM::SDP,
+            0x0003 => PSM::RFCOMM,
+            0x0005 => PSM::TCSBin,
+            0x0007 => PSM::TCSBinCordless,
+            0x000F => PSM::BNEP,
+            0x0011 => PSM::HIDControl,
+            0x0013 => PSM::HIDInterrupt,
+            0x0015 => PSM::UPnP,
+            0x0017 => PSM::AVCTP,
+            0x0019 => PSM::AVDTP,
+            0x001B => PSM::AVCTPBrowsing,
+            0x001D => PSM::UDICPlane,
+            0x001F => PSM::ATT,
+            0x0021 => PSM::ThreeDSP,
+            0x0023 => PSM::LEPsmIpsp,
+            0x0025 => PSM::OTS,
+            0x0027 => PSM::EATT,
+            _ => PSM::Undefined,
+        }
+    }
+    fn get_name(&self) -> String {
+        let name = match self {
+            PSM::SDP => "SDP",
+            PSM::RFCOMM => "RFCOMM",
+            PSM::TCSBin => "TCS-BIN",
+            PSM::TCSBinCordless => "TCS-BIN-CORDLESS",
+            PSM::BNEP => "BNEP",
+            PSM::HIDControl => "HID-Control",
+            PSM::HIDInterrupt => "HID-Interrupt",
+            PSM::UPnP => "UPnP",
+            PSM::AVCTP => "AVCTP",
+            PSM::AVDTP => "AVDTP",
+            PSM::AVCTPBrowsing => "AVCTP-Browsing",
+            PSM::UDICPlane => "UDIC-Plane",
+            PSM::ATT => "ATT",
+            PSM::ThreeDSP => "3DSP",
+            PSM::LEPsmIpsp => "LE-PSM-IPSP",
+            PSM::OTS => "OTS",
+            PSM::EATT => "EATT",
+            PSM::Undefined => "Undefined",
+        };
+        name.to_string()
+    }
+    fn get_value(&self) -> u16 {
+        match self {
+            PSM::SDP => 0x0001,
+            PSM::RFCOMM => 0x0003,
+            PSM::TCSBin => 0x0005,
+            PSM::TCSBinCordless => 0x0007,
+            PSM::BNEP => 0x000F,
+            PSM::HIDControl => 0x0011,
+            PSM::HIDInterrupt => 0x0013,
+            PSM::UPnP => 0x0015,
+            PSM::AVCTP => 0x0017,
+            PSM::AVDTP => 0x0019,
+            PSM::AVCTPBrowsing => 0x001B,
+            PSM::UDICPlane => 0x001D,
+            PSM::ATT => 0x001F,
+            PSM::ThreeDSP => 0x0021,
+            PSM::LEPsmIpsp => 0x0023,
+            PSM::OTS => 0x0025,
+            PSM::EATT => 0x0027,
+            PSM::Undefined => panic!("psm undefined!"),
+        }
+    }
 }
