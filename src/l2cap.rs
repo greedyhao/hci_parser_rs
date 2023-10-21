@@ -1,9 +1,13 @@
 use std::fmt::Debug;
 
-use crate::HostStack;
-use crate::ParseNodeWithArgs;
+use crate::sdp::SDP;
 
-// use crate::ParseBitsNode;
+use crate::HostStack;
+use crate::ParseNode;
+use crate::ParseNodeA;
+use crate::ParseNodeOpt;
+use crate::ParseNodeOptA;
+
 use crate::ParseBytesNode;
 
 #[derive(Default, Debug)]
@@ -33,7 +37,7 @@ impl Debug for L2CAPChannel {
             self.source_cid,
             self.dest_cid,
             self.psm,
-            PSM::fake_new(self.psm).get_name(),
+            PSM::new(&[], None, self.psm).get_psm_name(),
             self.local_mtu,
             self.remote_mtu,
             self.flush_timeout,
@@ -43,17 +47,19 @@ impl Debug for L2CAPChannel {
 
 #[derive(Debug, PartialEq)]
 pub enum L2CAP {
-    L2CAPB(L2CAPB),
+    L2CAPB(Option<L2CAPB>),
 }
 
-impl ParseNodeWithArgs for L2CAP {
-    fn new(data: &[u8], args: &mut HostStack) -> Self {
-        L2CAP::L2CAPB(L2CAPB::new(data, args))
+impl ParseNodeOpt for L2CAP {
+    fn new(data: &[u8], args: Option<&mut HostStack>) -> Option<Self> {
+        Some(L2CAP::L2CAPB(L2CAPB::new(data, args)))
     }
-
     fn as_json(&self, start_byte: u8) -> String {
         match self {
-            L2CAP::L2CAPB(l2cap) => l2cap.as_json(start_byte),
+            L2CAP::L2CAPB(l2cap) => l2cap
+                .is_some()
+                .then(|| l2cap.as_ref().unwrap().as_json(start_byte))
+                .unwrap_or("".to_string()),
         }
     }
 }
@@ -65,15 +71,19 @@ pub struct L2CAPB {
     payload: Channel,
 }
 
-impl ParseNodeWithArgs for L2CAPB {
-    fn new(data: &[u8], args: &mut HostStack) -> Self {
-        let pdu_len = u16::from_le_bytes([data[0], data[1]]);
-        let cid = u16::from_le_bytes([data[2], data[3]]);
-        let payload = Channel::new(&data[4..], args, cid);
-        L2CAPB {
-            pdu_len,
-            cid,
-            payload,
+impl ParseNodeOpt for L2CAPB {
+    fn new(data: &[u8], args: Option<&mut HostStack>) -> Option<Self> {
+        if data.len() < 4 {
+            None
+        } else {
+            let pdu_len = u16::from_le_bytes([data[0], data[1]]);
+            let cid = u16::from_le_bytes([data[2], data[3]]);
+            let payload = Channel::new(&data[4..], args, cid);
+            Some(L2CAPB {
+                pdu_len,
+                cid,
+                payload,
+            })
         }
     }
 
@@ -90,27 +100,28 @@ impl ParseNodeWithArgs for L2CAPB {
 #[derive(Debug, PartialEq)]
 enum Channel {
     Undefined,
-    L2CAPSignalingChannel(L2CAPSignaling),
+    L2CAPSignalingChannel(Option<L2CAPSignaling>),
     ConnetionlessChannel,
-    BrEdrSecurityManager, // 7
+    BrEdrSecurityManager,      // 7
     DynamicallyAllocated(PSM), // 0x40-0x7f
 }
 
-impl Channel {
-    fn new(data: &[u8], args: &mut HostStack, cid: u16) -> Self {
+impl ParseNodeA<u16> for Channel {
+    fn new(data: &[u8], args: Option<&mut HostStack>, cid: u16) -> Self {
         match cid {
             1 => Channel::L2CAPSignalingChannel(L2CAPSignaling::new(data, args)),
             2 => Channel::ConnetionlessChannel,
             7 => Channel::BrEdrSecurityManager,
             _ => {
                 if cid >= 0x40 && cid <= 0x7f {
-                    let channels = &mut args.l2cap_arg.channels;
+                    let mut psm = 0;
+                    let channels = &args.as_ref().unwrap().l2cap_arg.channels;
                     for channel in channels.iter() {
                         if channel.dest_cid == cid {
-                            return Channel::DynamicallyAllocated(PSM::new(data, channel.psm));
+                            psm = channel.psm;
                         }
                     }
-                    Channel::DynamicallyAllocated(PSM::new(data, 0))
+                    Channel::DynamicallyAllocated(PSM::new(data, args, psm))
                 } else {
                     Channel::Undefined
                 }
@@ -119,15 +130,13 @@ impl Channel {
     }
     fn as_json(&self, start_byte: u8) -> String {
         match self {
-            Channel::L2CAPSignalingChannel(l2cap_signaling) => l2cap_signaling.as_json(start_byte),
+            Channel::L2CAPSignalingChannel(l2cap_signaling) => l2cap_signaling
+                .is_some()
+                .then(|| l2cap_signaling.as_ref().unwrap().as_json(start_byte))
+                .unwrap_or("".to_string()),
             _ => "".to_string(),
         }
     }
-}
-
-trait SignalNode {
-    fn new(data: &[u8], args: &mut HostStack, id: u8) -> Self;
-    fn as_json(&self, start_byte: u8) -> String;
 }
 
 #[derive(Debug, PartialEq)]
@@ -135,20 +144,24 @@ struct L2CAPSignaling {
     code: u8,
     identifier: u8,
     data_length: u16,
-    data: L2CAPSigData,
+    data: Option<L2CAPSigData>,
 }
 
-impl ParseNodeWithArgs for L2CAPSignaling {
-    fn new(data: &[u8], args: &mut HostStack) -> Self {
-        let code = data[0];
-        let identifier = data[1];
-        let data_length = u16::from_le_bytes([data[2], data[3]]);
-        let data = L2CAPSigData::new(data, args, identifier);
-        L2CAPSignaling {
-            code,
-            identifier,
-            data_length,
-            data,
+impl ParseNodeOpt for L2CAPSignaling {
+    fn new(data: &[u8], args: Option<&mut HostStack>) -> Option<Self> {
+        if data.len() < 4 {
+            None
+        } else {
+            let code = data[0];
+            let identifier = data[1];
+            let data_length = u16::from_le_bytes([data[2], data[3]]);
+            let data = L2CAPSigData::new(data, args, identifier);
+            Some(L2CAPSignaling {
+                code,
+                identifier,
+                data_length,
+                data,
+            })
         }
     }
     fn as_json(&self, start_byte: u8) -> String {
@@ -157,7 +170,11 @@ impl ParseNodeWithArgs for L2CAPSignaling {
             ParseBytesNode::new(start_byte + 1, 1).format("Identifier", self.identifier, "", "");
         let data_length_s =
             ParseBytesNode::new(start_byte + 2, 2).format("Data Length", self.data_length, "", "");
-        let data_s = self.data.as_json(start_byte);
+        let data_s = self
+            .data
+            .is_some()
+            .then(|| self.data.as_ref().unwrap().as_json(start_byte))
+            .unwrap_or("".to_string());
         format!(
             r#"{}, {}, {}, {}"#,
             code_s, identifier_s, data_length_s, data_s
@@ -169,48 +186,63 @@ impl ParseNodeWithArgs for L2CAPSignaling {
 enum L2CAPSigData {
     Undefined,
     CommandRejectRspCode,
-    ConnectionReqCode(SignalConnReq),
-    ConnectionRspCode(SignalConnRsp),
-    ConfigurationReqCode(SignalConfReq),
-    ConfigurationRspCode(SignalConfRsp),
+    ConnectionReqCode(Option<SignalConnReq>),
+    ConnectionRspCode(Option<SignalConnRsp>),
+    ConfigurationReqCode(Option<SignalConfReq>),
+    ConfigurationRspCode(Option<SignalConfRsp>),
     DisconnectionReqCode,
     DisconnectionRspCode,
     EchoReqCode,
     EchoRspCode,
-    InformationReqCode(SignalInfoReq),
+    InformationReqCode(Option<SignalInfoReq>),
     InformationRspCode,
 }
 
-impl SignalNode for L2CAPSigData {
-    fn new(data: &[u8], args: &mut HostStack, id: u8) -> Self {
-        let code = data[0];
-        let data = &data[4..];
-        match code {
-            0x01 => L2CAPSigData::CommandRejectRspCode,
-            0x02 => L2CAPSigData::ConnectionReqCode(SignalConnReq::new(data, args, id)),
-            0x03 => L2CAPSigData::ConnectionRspCode(SignalConnRsp::new(data, args, id)),
-            0x04 => L2CAPSigData::ConfigurationReqCode(SignalConfReq::new(data, args, id)),
-            0x05 => L2CAPSigData::ConfigurationRspCode(SignalConfRsp::new(data, args, id)),
-            0x06 => L2CAPSigData::DisconnectionReqCode,
-            0x07 => L2CAPSigData::DisconnectionRspCode,
-            0x08 => L2CAPSigData::EchoReqCode,
-            0x09 => L2CAPSigData::EchoRspCode,
-            0x0a => L2CAPSigData::InformationReqCode(SignalInfoReq::new(data, args, id)),
-            0x0b => L2CAPSigData::InformationRspCode,
-            _ => L2CAPSigData::Undefined,
+impl ParseNodeOptA<u8> for L2CAPSigData {
+    fn new(data: &[u8], args: Option<&mut HostStack>, id: u8) -> Option<Self> {
+        if data.len() < 4 {
+            None
+        } else {
+            let code = data[0];
+            let data = &data[4..];
+            let sig = match code {
+                0x01 => L2CAPSigData::CommandRejectRspCode,
+                0x02 => L2CAPSigData::ConnectionReqCode(SignalConnReq::new(data, args, id)),
+                0x03 => L2CAPSigData::ConnectionRspCode(SignalConnRsp::new(data, args, id)),
+                0x04 => L2CAPSigData::ConfigurationReqCode(SignalConfReq::new(data, args, id)),
+                0x05 => L2CAPSigData::ConfigurationRspCode(SignalConfRsp::new(data, args, id)),
+                0x06 => L2CAPSigData::DisconnectionReqCode,
+                0x07 => L2CAPSigData::DisconnectionRspCode,
+                0x08 => L2CAPSigData::EchoReqCode,
+                0x09 => L2CAPSigData::EchoRspCode,
+                0x0a => L2CAPSigData::InformationReqCode(SignalInfoReq::new(data, args, id)),
+                0x0b => L2CAPSigData::InformationRspCode,
+                _ => L2CAPSigData::Undefined,
+            };
+            Some(sig)
         }
     }
-
     fn as_json(&self, start_byte: u8) -> String {
         let start_byte = start_byte + 4;
-        match self {
-            L2CAPSigData::ConnectionReqCode(signal) => signal.as_json(start_byte),
-            L2CAPSigData::ConnectionRspCode(signal) => signal.as_json(start_byte),
-            L2CAPSigData::ConfigurationReqCode(signal) => signal.as_json(start_byte),
-            L2CAPSigData::ConfigurationRspCode(signal) => signal.as_json(start_byte),
-            L2CAPSigData::InformationReqCode(signal) => signal.as_json(start_byte),
-            _ => "".to_string(),
-        }
+        let str = match self {
+            L2CAPSigData::ConnectionReqCode(sig) => sig
+                .is_some()
+                .then(|| sig.as_ref().take().unwrap().as_json(start_byte)),
+            L2CAPSigData::ConnectionRspCode(sig) => sig
+                .is_some()
+                .then(|| sig.as_ref().take().unwrap().as_json(start_byte)),
+            L2CAPSigData::ConfigurationReqCode(sig) => sig
+                .is_some()
+                .then(|| sig.as_ref().take().unwrap().as_json(start_byte)),
+            L2CAPSigData::ConfigurationRspCode(sig) => sig
+                .is_some()
+                .then(|| sig.as_ref().take().unwrap().as_json(start_byte)),
+            L2CAPSigData::InformationReqCode(sig) => sig
+                .is_some()
+                .then(|| sig.as_ref().take().unwrap().as_json(start_byte)),
+            _ => None,
+        };
+        str.unwrap_or("".to_string())
     }
 }
 
@@ -221,35 +253,38 @@ struct SignalConnReq {
     source_cid: u16,
 }
 
-impl SignalNode for SignalConnReq {
-    fn new(data: &[u8], args: &mut HostStack, id: u8) -> Self {
-        let sig = SignalConnReq {
-            psm: u16::from_le_bytes([data[0], data[1]]),
-            source_cid: u16::from_le_bytes([data[2], data[3]]),
-        };
+impl ParseNodeOptA<u8> for SignalConnReq {
+    fn new(data: &[u8], args: Option<&mut HostStack>, id: u8) -> Option<Self> {
+        if data.len() != 4 {
+            None
+        } else {
+            let psm = u16::from_le_bytes([data[0], data[1]]);
+            let source_cid = u16::from_le_bytes([data[2], data[3]]);
 
-        let channels = &mut args.l2cap_arg.channels;
-        let mut is_contain = false;
-        for channel in channels.iter() {
-            if channel.source_cid == sig.source_cid {
-                is_contain = true;
-                break;
+            let channels = &mut args.unwrap().l2cap_arg.channels;
+            let mut is_contain = false;
+            for channel in channels.iter() {
+                if channel.source_cid == source_cid {
+                    is_contain = true;
+                    break;
+                }
             }
+            if !is_contain {
+                let mut channel = L2CAPChannel::default();
+                channel.identifier = id;
+                channel.psm = psm;
+                channel.source_cid = source_cid;
+                channels.push(channel);
+            }
+
+            Some(SignalConnReq { psm, source_cid })
         }
-        if !is_contain {
-            let mut channel = L2CAPChannel::default();
-            channel.identifier = id;
-            channel.psm = sig.psm;
-            channel.source_cid = sig.source_cid;
-            channels.push(channel);
-        }
-        sig
     }
     fn as_json(&self, start_byte: u8) -> String {
         let psm_s = ParseBytesNode::new(start_byte, 2).format(
             "PSM",
             self.psm,
-            &PSM::fake_new(self.psm).get_name(),
+            &PSM::new(&[], None, self.psm).get_psm_name(),
             "",
         );
         let source_cid_s =
@@ -267,23 +302,29 @@ struct SignalConnRsp {
     status: u16,
 }
 
-impl SignalNode for SignalConnRsp {
-    fn new(data: &[u8], args: &mut HostStack, id: u8) -> Self {
-        let sig = SignalConnRsp {
-            dest_cid: u16::from_le_bytes([data[0], data[1]]),
-            source_cid: u16::from_le_bytes([data[2], data[3]]),
-            result: u16::from_le_bytes([data[4], data[5]]),
-            status: u16::from_le_bytes([data[6], data[7]]),
-        };
+impl ParseNodeOptA<u8> for SignalConnRsp {
+    fn new(data: &[u8], args: Option<&mut HostStack>, id: u8) -> Option<Self> {
+        if data.len() != 8 {
+            None
+        } else {
+            let dest_cid = u16::from_le_bytes([data[0], data[1]]);
+            let source_cid = u16::from_le_bytes([data[2], data[3]]);
 
-        let channels = &mut args.l2cap_arg.channels;
-        for channel in channels.iter_mut() {
-            if channel.source_cid == sig.source_cid {
-                channel.dest_cid = sig.dest_cid;
-                channel.identifier = id;
+            let channels = &mut args.unwrap().l2cap_arg.channels;
+            for channel in channels.iter_mut() {
+                if channel.source_cid == source_cid {
+                    channel.dest_cid = dest_cid;
+                    channel.identifier = id;
+                }
             }
+
+            Some(SignalConnRsp {
+                dest_cid,
+                source_cid,
+                result: u16::from_le_bytes([data[4], data[5]]),
+                status: u16::from_le_bytes([data[6], data[7]]),
+            })
         }
-        sig
     }
 
     fn as_json(&self, start_byte: u8) -> String {
@@ -329,35 +370,42 @@ struct SignalConfReq {
     option: Option<ConfigOption>,
 }
 
-impl SignalNode for SignalConfReq {
-    fn new(data: &[u8], args: &mut HostStack, id: u8) -> Self {
-        let sig = SignalConfReq {
-            dest_cid: u16::from_le_bytes([data[0], data[1]]),
-            flags: u16::from_le_bytes([data[2], data[3]]),
-            option: Some(ConfigOption::new(&data[4..])),
-        };
+impl ParseNodeOptA<u8> for SignalConfReq {
+    fn new(data: &[u8], args: Option<&mut HostStack>, id: u8) -> Option<Self> {
+        if data.len() < 4 {
+            None
+        } else {
+            let dest_cid = u16::from_le_bytes([data[0], data[1]]);
+            let flags = u16::from_le_bytes([data[2], data[3]]);
+            let option = ConfigOption::new(&data[4..], None);
 
-        let channels = &mut args.l2cap_arg.channels;
-        for channel in channels.iter_mut() {
-            if sig.dest_cid == channel.dest_cid {
-                let data = sig.option.as_ref();
-                if let Some(option) = data {
-                    if let ConfigOptionData::MTU(option) = &option.data {
-                        channel.identifier = id;
-                        channel.local_mtu = option.mtu;
+            let channels = &mut args.unwrap().l2cap_arg.channels;
+            for channel in channels.iter_mut() {
+                if dest_cid == channel.dest_cid {
+                    let data = option.as_ref();
+                    if let Some(option) = data {
+                        if let Some(ConfigOptionData::MTU(option)) = &option.data {
+                            channel.identifier = id;
+                            channel.local_mtu = option.mtu;
+                        }
                     }
-                }
-            } else if sig.dest_cid == channel.source_cid {
-                let data = sig.option.as_ref();
-                if let Some(option) = data {
-                    if let ConfigOptionData::MTU(option) = &option.data {
-                        channel.identifier = id;
-                        channel.remote_mtu = option.mtu;
+                } else if dest_cid == channel.source_cid {
+                    let data = option.as_ref();
+                    if let Some(option) = data {
+                        if let Some(ConfigOptionData::MTU(option)) = &option.data {
+                            channel.identifier = id;
+                            channel.remote_mtu = option.mtu;
+                        }
                     }
                 }
             }
+
+            Some(SignalConfReq {
+                dest_cid,
+                flags,
+                option,
+            })
         }
-        sig
     }
 
     fn as_json(&self, start_byte: u8) -> String {
@@ -383,35 +431,38 @@ struct SignalConfRsp {
     option: Option<ConfigOption>,
 }
 
-impl SignalNode for SignalConfRsp {
-    fn new(data: &[u8], args: &mut HostStack, id: u8) -> Self {
-        let option = if data.len() > 6 {
-            Some(ConfigOption::new(&data[6..]))
-        } else {
+impl ParseNodeOptA<u8> for SignalConfRsp {
+    fn new(data: &[u8], args: Option<&mut HostStack>, id: u8) -> Option<Self> {
+        if data.len() < 6 {
             None
-        };
-        let sig = SignalConfRsp {
-            source_cid: u16::from_le_bytes([data[0], data[1]]),
-            flags: u16::from_le_bytes([data[2], data[3]]),
-            result: u16::from_le_bytes([data[4], data[5]]),
-            option,
-        };
+        } else {
+            let source_cid = u16::from_le_bytes([data[0], data[1]]);
+            let flags = u16::from_le_bytes([data[2], data[3]]);
+            let result = u16::from_le_bytes([data[4], data[5]]);
+            let option = ConfigOption::new(&data[6..], None);
 
-        let channels = &mut args.l2cap_arg.channels;
-        for channel in channels.iter_mut() {
-            if sig.source_cid == channel.dest_cid {
-                let data = sig.option.as_ref();
-                if let Some(option) = data {
-                    if let ConfigOptionData::MTU(option) = &option.data {
-                        channel.identifier = id;
-                        channel.remote_mtu = option.mtu;
+            let channels = &mut args.unwrap().l2cap_arg.channels;
+            for channel in channels.iter_mut() {
+                if source_cid == channel.dest_cid {
+                    let data = option.as_ref();
+                    if let Some(option) = data {
+                        if let Some(ConfigOptionData::MTU(option)) = &option.data {
+                            channel.identifier = id;
+                            channel.remote_mtu = option.mtu;
+                        }
                     }
                 }
             }
-        }
 
-        sig
+            Some(SignalConfRsp {
+                source_cid,
+                flags,
+                result,
+                option,
+            })
+        }
     }
+
     fn as_json(&self, start_byte: u8) -> String {
         let result_name_s = match self.result {
             0x0000 => "Success",
@@ -442,10 +493,14 @@ struct SignalInfoReq {
     info_type: u16,
 }
 
-impl SignalNode for SignalInfoReq {
-    fn new(data: &[u8], _args: &mut HostStack, _id: u8) -> Self {
-        SignalInfoReq {
-            info_type: u16::from_le_bytes([data[0], data[1]]),
+impl ParseNodeOptA<u8> for SignalInfoReq {
+    fn new(data: &[u8], _args: Option<&mut HostStack>, _id: u8) -> Option<Self> {
+        if data.len() != 2 {
+            None
+        } else {
+            Some(SignalInfoReq {
+                info_type: u16::from_le_bytes([data[0], data[1]]),
+            })
         }
     }
     fn as_json(&self, start_byte: u8) -> String {
@@ -467,19 +522,24 @@ enum ConfigOptionData {
     ExtendedWindowSize,
 }
 
-impl ConfigOptionData {
-    fn new(data: &[u8]) -> Self {
-        let opt_type = data[0];
-        let data = &data[2..];
-        match opt_type {
-            0x01 => ConfigOptionData::MTU(ConfigOptionMTU::new(data)),
-            0x02 => ConfigOptionData::FlushTimeout,
-            0x03 => ConfigOptionData::QOS,
-            0x04 => ConfigOptionData::RetransmissionAndFlowControl,
-            0x05 => ConfigOptionData::FCS,
-            0x06 => ConfigOptionData::ExtendedFlowSpecification,
-            0x07 => ConfigOptionData::ExtendedWindowSize,
-            _ => ConfigOptionData::Undefined,
+impl ParseNodeOpt for ConfigOptionData {
+    fn new(data: &[u8], _args: Option<&mut HostStack>) -> Option<Self> {
+        if data.len() < 2 {
+            None
+        } else {
+            let opt_type = data[0];
+            let data = &data[2..];
+            let opt = match opt_type {
+                0x01 => ConfigOptionData::MTU(ConfigOptionMTU::new(data, None)),
+                0x02 => ConfigOptionData::FlushTimeout,
+                0x03 => ConfigOptionData::QOS,
+                0x04 => ConfigOptionData::RetransmissionAndFlowControl,
+                0x05 => ConfigOptionData::FCS,
+                0x06 => ConfigOptionData::ExtendedFlowSpecification,
+                0x07 => ConfigOptionData::ExtendedWindowSize,
+                _ => ConfigOptionData::Undefined,
+            };
+            Some(opt)
         }
     }
 
@@ -495,28 +555,35 @@ impl ConfigOptionData {
 struct ConfigOption {
     opt_type: u8,
     opt_len: u8,
-    data: ConfigOptionData,
+    data: Option<ConfigOptionData>,
 }
 
-impl ConfigOption {
-    fn new(data: &[u8]) -> Self {
-        let opt_type = data[0];
-        let opt_len = data[1];
+impl ParseNodeOpt for ConfigOption {
+    fn new(data: &[u8], _args: Option<&mut HostStack>) -> Option<Self> {
+        if data.len() < 2 {
+            None
+        } else {
+            let opt_type = data[0];
+            let opt_len = data[1];
 
-        let data = ConfigOptionData::new(data);
-        ConfigOption {
-            opt_type,
-            opt_len,
-            data,
+            let data = ConfigOptionData::new(data, None);
+            Some(ConfigOption {
+                opt_type,
+                opt_len,
+                data,
+            })
         }
     }
-
     fn as_json(&self, start_byte: u8) -> String {
         let opt_type_s =
             ParseBytesNode::new(start_byte, 1).format("Option Type", self.opt_type, "", "");
         let opt_len_s =
             ParseBytesNode::new(start_byte + 1, 1).format("Option Length", self.opt_len, "", "");
-        let data_s = self.data.as_json(start_byte + 2);
+        let data_s = self
+            .data
+            .is_some()
+            .then(|| self.data.as_ref().unwrap().as_json(start_byte + 2))
+            .unwrap_or("".to_string());
 
         format!(
             r#""Configuration Options": {{{}, {}, {}}}"#,
@@ -530,8 +597,8 @@ struct ConfigOptionMTU {
     mtu: u16,
 }
 
-impl ConfigOptionMTU {
-    fn new(data: &[u8]) -> Self {
+impl ParseNode for ConfigOptionMTU {
+    fn new(data: &[u8], _args: Option<&mut HostStack>) -> Self {
         ConfigOptionMTU {
             mtu: u16::from_le_bytes([data[0], data[1]]),
         }
@@ -547,7 +614,7 @@ impl ConfigOptionMTU {
 #[derive(Debug, PartialEq)]
 enum PSM {
     Undefined,
-    SDP,
+    SDP(Option<SDP>),
     RFCOMM,
     TCSBin,
     TCSBinCordless,
@@ -566,16 +633,10 @@ enum PSM {
     EATT,
 }
 
-impl Default for PSM {
-    fn default() -> Self {
-        PSM::Undefined
-    }
-}
-
-impl PSM {
-    fn new(_data: &[u8], psm: u16) -> Self {
+impl ParseNodeA<u16> for PSM {
+    fn new(data: &[u8], args: Option<&mut HostStack>, psm: u16) -> Self {
         match psm {
-            0x0001 => PSM::SDP,
+            0x0001 => PSM::SDP(SDP::new(data, args)),
             0x0003 => PSM::RFCOMM,
             0x0005 => PSM::TCSBin,
             0x0007 => PSM::TCSBinCordless,
@@ -596,14 +657,15 @@ impl PSM {
         }
     }
 
-    fn fake_new(psm: u16) -> Self {
-        let data = vec![0; 255];
-        PSM::new(&data, psm)
+    fn as_json(&self, _start_byte: u8) -> String {
+        "".to_string()
     }
+}
 
-    fn get_name(&self) -> String {
+impl PSM {
+    fn get_psm_name(&self) -> String {
         let name = match self {
-            PSM::SDP => "SDP",
+            PSM::SDP(_) => "SDP",
             PSM::RFCOMM => "RFCOMM",
             PSM::TCSBin => "TCS-BIN",
             PSM::TCSBinCordless => "TCS-BIN-CORDLESS",
@@ -626,9 +688,9 @@ impl PSM {
     }
 
     #[allow(unused)]
-    fn get_value(&self) -> u16 {
+    fn get_psm_value(&self) -> u16 {
         match self {
-            PSM::SDP => 0x0001,
+            PSM::SDP(_) => 0x0001,
             PSM::RFCOMM => 0x0003,
             PSM::TCSBin => 0x0005,
             PSM::TCSBinCordless => 0x0007,

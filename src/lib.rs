@@ -24,12 +24,22 @@ impl HostStack {
 }
 
 pub trait ParseNode {
-    fn new(data: &[u8]) -> Self;
+    fn new(data: &[u8], args: Option<&mut HostStack>) -> Self;
     fn as_json(&self, start_byte: u8) -> String;
 }
 
-pub trait ParseNodeWithArgs {
-    fn new(data: &[u8], args: &mut HostStack) -> Self;
+pub trait ParseNodeA<T> {
+    fn new(data: &[u8], args: Option<&mut HostStack>, param: T) -> Self;
+    fn as_json(&self, start_byte: u8) -> String;
+}
+
+pub trait ParseNodeOpt: Sized {
+    fn new(data: &[u8], args: Option<&mut HostStack>) -> Option<Self>;
+    fn as_json(&self, start_byte: u8) -> String;
+}
+
+pub trait ParseNodeOptA<T>: Sized {
+    fn new(data: &[u8], args: Option<&mut HostStack>, param: T) -> Option<Self>;
     fn as_json(&self, start_byte: u8) -> String;
 }
 
